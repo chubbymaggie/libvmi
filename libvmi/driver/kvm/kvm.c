@@ -49,11 +49,20 @@
 #include "driver/kvm/kvm.h"
 #include "driver/kvm/kvm_private.h"
 
+#define QMP_CMD_LENGTH 256
+
 // request struct matches a definition in qemu source code
 struct request {
     uint8_t type;   // 0 quit, 1 read, 2 write, ... rest reserved
     uint64_t address;   // address to read from OR write to
     uint64_t length;    // number of bytes to read OR write
+};
+
+enum segment_type {
+  SEGMENT_SELECTOR,
+  SEGMENT_BASE,
+  SEGMENT_LIMIT,
+  SEGMENT_ATTR
 };
 
 //----------------------------------------------------------------------------
@@ -69,13 +78,16 @@ exec_qmp_cmd(
     FILE *p;
     char *output = safe_malloc(20000);
     size_t length = 0;
-
-    char *name = (char *) virDomainGetName(kvm->dom);
-    int cmd_length = strlen(name) + strlen(query) + 29;
+    const char *name = virDomainGetName(kvm->dom);
+    int cmd_length = strlen(name) + strnlen(query, QMP_CMD_LENGTH) + 47;
     char *cmd = safe_malloc(cmd_length);
 
-    snprintf(cmd, cmd_length, "virsh qemu-monitor-command %s %s", name,
+    int rc = snprintf(cmd, cmd_length, "virsh -c qemu:///system qemu-monitor-command %s %s", name,
              query);
+    if (rc < 0 || rc >= cmd_length) {
+        errprint("Failed to properly format `virsh qemu-monitor-command`\n");
+        return NULL;
+    }
     dbprint(VMI_DEBUG_KVM, "--qmp: %s\n", cmd);
 
     p = popen(cmd, "r");
@@ -112,11 +124,16 @@ exec_memory_access(
     kvm_instance_t *kvm)
 {
     char *tmpfile = tempnam("/tmp", "vmi");
-    char *query = (char *) safe_malloc(256);
+    char *query = (char *) safe_malloc(QMP_CMD_LENGTH);
 
-    sprintf(query,
+    int rc = snprintf(query,
+            QMP_CMD_LENGTH,
             "'{\"execute\": \"pmemaccess\", \"arguments\": {\"path\": \"%s\"}}'",
             tmpfile);
+    if (rc < 0 || rc >= QMP_CMD_LENGTH) {
+        errprint("Failed to properly format `pmemaccess` command\n");
+        return NULL;
+    }
     kvm->ds_path = strdup(tmpfile);
     free(tmpfile);
 
@@ -132,11 +149,16 @@ exec_xp(
     int numwords,
     addr_t paddr)
 {
-    char *query = (char *) safe_malloc(256);
+    char *query = (char *) safe_malloc(QMP_CMD_LENGTH);
 
-    sprintf(query,
-            "'{\"execute\": \"human-monitor-command\", \"arguments\": {\"command-line\": \"xp /%dwx 0x%x\"}}'",
+    int rc = snprintf(query,
+            QMP_CMD_LENGTH,
+            "'{\"execute\": \"human-monitor-command\", \"arguments\": {\"command-line\": \"xp /%dwx 0x%lx\"}}'",
             numwords, paddr);
+    if (rc < 0 || rc >= QMP_CMD_LENGTH) {
+        errprint("Failed to properly format `human-monitor-command` command\n");
+        return NULL;
+    }
 
     char *output = exec_qmp_cmd(kvm, query);
 
@@ -162,6 +184,59 @@ parse_reg_value(
     else {
         return 0;
     }
+}
+
+static reg_t
+parse_seg_reg_value(
+    char *regname,
+    char *ir_output,
+    int type)
+{
+    int offset;
+    char *ptr, *tmp_ptr;
+    char keyword[4];
+
+    if (NULL == ir_output || NULL == regname) {
+        return 0;
+    }
+
+    strcpy(keyword, regname);
+    if(strlen(regname) == 2)
+        strcat(keyword, " =");
+    else
+        strcat(keyword, "=");
+
+    if(NULL == (ptr = strcasestr(ir_output, keyword)))
+         return 0;
+
+    tmp_ptr = ptr;
+    switch(type) {
+        case SEGMENT_SELECTOR:
+            offset = 4;
+            break;
+        case SEGMENT_BASE:
+            offset = 9;
+            break;
+        case SEGMENT_LIMIT:
+            tmp_ptr += 9;
+            if(8 == strlen(tmp_ptr))
+                offset = 18;
+            else
+                offset = 26;
+            break;
+        case SEGMENT_ATTR:
+            tmp_ptr += 9;
+            if(8 == strlen(tmp_ptr))
+                offset = 27;
+            else
+                offset = 35;
+            break;
+        default:
+            return 0;
+    }
+
+    ptr += offset;
+    return (reg_t) strtoll(ptr, (char **) NULL, 16);
 }
 
 status_t
@@ -240,7 +315,7 @@ destroy_domain_socket(
         req.type = 0;   // quit
         req.address = 0;
         req.length = 0;
-        write(kvm->socket_fd, &req, sizeof(struct request));
+        (void)write(kvm->socket_fd, &req, sizeof(struct request));
     }
 }
 
@@ -328,11 +403,11 @@ link_mmap_shm_snapshot_dev(
     vmi_instance_t vmi)
 {
     kvm_instance_t *kvm = kvm_get_instance(vmi);
-    if ((kvm->shm_snapshot_fd = shm_open(kvm->shm_snapshot_path, O_RDONLY, NULL)) < 0) {
+    if ((kvm->shm_snapshot_fd = shm_open(kvm->shm_snapshot_path, O_RDONLY, 0)) < 0) {
         errprint("fail in shm_open %s", kvm->shm_snapshot_path);
         return VMI_FAILURE;
     }
-    ftruncate(kvm->shm_snapshot_fd, vmi->size);
+    ftruncate(kvm->shm_snapshot_fd, vmi->max_physical_address);
 
     /* try memory mapped file I/O */
     int mmap_flags = (MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE);
@@ -341,7 +416,7 @@ link_mmap_shm_snapshot_dev(
 #endif // MMAP_HUGETLB
 
     kvm->shm_snapshot_map = mmap(NULL,  // addr
-        vmi->size,   // len
+        vmi->max_physical_address,   // len
         PROT_READ,   // prot
         mmap_flags,  // flags
         kvm->shm_snapshot_fd,    // file descriptor
@@ -433,7 +508,7 @@ void insert_v2p_page_pair_to_m2p_chunk_list(
  * @param[in] end_paddr
  */
 void insert_v2p_page_pair_to_v2m_chunk_list(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     v2m_chunk_t *v2m_chunk_list_ptr,
     v2m_chunk_t *v2m_chunk_head_ptr,
     m2p_mapping_clue_chunk_t *m2p_chunk_list_ptr,
@@ -514,7 +589,7 @@ walkthrough_shm_snapshot_pagetable(
         addr_t start_paddr = page->paddr;
         addr_t end_vaddr = start_vaddr | (page->size-1);
         addr_t end_paddr = start_paddr | (page->size-1);
-        if (start_paddr < vmi->size) {
+        if (start_paddr < vmi->max_physical_address) {
             insert_v2p_page_pair_to_v2m_chunk_list(vmi, &v2m_chunk_list, &v2m_chunk_head,
                 &m2p_chunk_list, &m2p_chunk_head,
                 start_vaddr, end_vaddr, start_paddr, end_paddr);
@@ -541,12 +616,12 @@ walkthrough_shm_snapshot_pagetable(
  * @param[out] maddr_indicator_export
  */
 status_t probe_v2m_medial_addr(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     v2m_chunk_t v2m_chunk,
     void** maddr_indicator_export)
 {
     if (NULL != v2m_chunk) {
-        dbprint(VMI_DEBUG_KVM, "probe medial space for va: %016llx - %016llx, size: %dKB\n",
+        dbprint(VMI_DEBUG_KVM, "probe medial space for va: %016"PRIx64" - %016"PRIx64", size: %"PRIu64"KB\n",
             v2m_chunk->vaddr_begin, v2m_chunk->vaddr_end,
             (v2m_chunk->vaddr_end - v2m_chunk->vaddr_begin+1)>>10);
 
@@ -562,8 +637,7 @@ status_t probe_v2m_medial_addr(
             *maddr_indicator_export = map;
             (void) munmap(map, size);
         } else {
-            errprint("Failed to find large enough medial address space,"
-                " size:"PRIu64" MB\n", size>>20);
+            errprint("Failed to find large enough medial address space, size:%"PRIu64" MB\n", size>>20);
             perror("");
             return VMI_FAILURE;
         }
@@ -584,7 +658,7 @@ status_t mmap_m2p_chunks(
 {
     size_t map_offset = 0;
      while (NULL != m2p_chunk_list) {
-         dbprint(VMI_DEBUG_KVM, "map va: %016llx - %016llx, pa: %016llx - %016llx, size: %dKB\n",
+         dbprint(VMI_DEBUG_KVM, "map va: %016"PRIx64" - %016"PRIx64", pa: %016"PRIx64" - %016"PRIx64", size: %"PRIu64"KB\n",
              m2p_chunk_list->vaddr_begin, m2p_chunk_list->vaddr_end,
              m2p_chunk_list->paddr_begin, m2p_chunk_list->paddr_end,
              (m2p_chunk_list->vaddr_end - m2p_chunk_list->vaddr_begin+1)>>10);
@@ -616,7 +690,7 @@ status_t mmap_m2p_chunks(
  * @param[out] m2p_chunk_list_ptr
  */
 status_t delete_m2p_chunks(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     m2p_mapping_clue_chunk_t* m2p_chunk_list_ptr)
 {
     m2p_mapping_clue_chunk_t tmp = *m2p_chunk_list_ptr;
@@ -797,7 +871,7 @@ get_v2m_table(
  */
 size_t
 lookup_v2m_table(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     v2m_chunk_t v2m_chunk_list,
     addr_t vaddr,
     void** medial_vaddr_ptr)
@@ -930,21 +1004,20 @@ kvm_get_memory_shm_snapshot(
     addr_t paddr,
     uint32_t length)
 {
-    if (paddr + length > vmi->size) {
+    if (paddr + length > vmi->max_physical_address) {
         dbprint
             (VMI_DEBUG_KVM, "--%s: request for PA range [0x%.16"PRIx64"-0x%.16"PRIx64"] reads past end of shm-snapshot\n",
              __FUNCTION__, paddr, paddr + length);
-        goto error_noprint;
+        goto error;
     }
 
     kvm_instance_t *kvm = kvm_get_instance(vmi);
     return kvm->shm_snapshot_map + paddr;
 
-error_print:
+error:
     dbprint(VMI_DEBUG_KVM, "%s: failed to read %d bytes at "
             "PA (offset) 0x%.16"PRIx64" [VM size 0x%.16"PRIx64"]\n", __FUNCTION__,
-            length, paddr, vmi->size);
-error_noprint:
+            length, paddr, vmi->max_physical_address);
     return NULL;
 }
 
@@ -958,8 +1031,8 @@ error_noprint:
  */
 void
 kvm_release_memory_shm_snapshot(
-    void *memory,
-    size_t length)
+    void* UNUSED(memory),
+    size_t UNUSED(length))
 {
 }
 
@@ -1003,7 +1076,7 @@ kvm_teardown_shm_snapshot_mode(
 
     if (VMI_SUCCESS == test_using_shm_snapshot(kvm)) {
         dbprint(VMI_DEBUG_KVM, "--kvm: teardown KVM shm-snapshot\n");
-        munmap_unlink_shm_snapshot_dev(kvm, vmi->size);
+        munmap_unlink_shm_snapshot_dev(kvm, vmi->max_physical_address);
         if (kvm->shm_snapshot_cpu_regs != NULL) {
             free(kvm->shm_snapshot_cpu_regs);
             kvm->shm_snapshot_cpu_regs = NULL;
@@ -1040,11 +1113,12 @@ kvm_get_memory_patch(
     }
     else {
         // get the data from kvm
-        nbytes =
-            read(kvm_get_instance(vmi)->socket_fd, buf, length + 1);
-        if (nbytes != (length + 1)) {
+        nbytes = read(kvm_get_instance(vmi)->socket_fd, buf, length + 1);
+        if ( nbytes <= 0 )
             goto error_exit;
-        }
+
+        if ( (uint32_t)nbytes != (length + 1) )
+            goto error_exit;
 
         // check that kvm thinks everything is ok by looking at the last byte
         // of the buffer, 0 is failure and 1 is success
@@ -1070,10 +1144,13 @@ kvm_get_memory_native(
     int numwords = ceil(length / 4);
     char *buf = safe_malloc(numwords * 4);
     char *bufstr = exec_xp(kvm_get_instance(vmi), numwords, paddr);
-
     char *paddrstr = safe_malloc(32);
 
-    sprintf(paddrstr, "%.16x", paddr);
+    int rc = snprintf(paddrstr, 32, "%.16lx", paddr);
+    if (rc < 0 || rc >= 32) {
+        errprint("Failed to properly format physical address\n");
+        return NULL;
+    }
 
     char *ptr = strcasestr(bufstr, paddrstr);
     int i = 0, j = 0;
@@ -1089,7 +1166,11 @@ kvm_get_memory_native(
             i++;
         }
 
-        sprintf(paddrstr, "%.16x", paddr + i * 4);
+        rc = snprintf(paddrstr, 32, "%.16lx", paddr + i * 4);
+        if (rc < 0 || rc >= 32) {
+            errprint("Failed to properly format physical address\n");
+            return NULL;
+        }
         ptr = strcasestr(ptr, paddrstr);
     }
     if (bufstr)
@@ -1102,7 +1183,7 @@ kvm_get_memory_native(
 void
 kvm_release_memory(
     void *memory,
-    size_t length)
+    size_t UNUSED(length))
 {
     if (memory)
         free(memory);
@@ -1130,8 +1211,12 @@ kvm_put_memory(
     else {
         uint8_t status = 0;
 
-        write(kvm_get_instance(vmi)->socket_fd, buf, length);
-        read(kvm_get_instance(vmi)->socket_fd, &status, 1);
+        if ( length != write(kvm_get_instance(vmi)->socket_fd, buf, length) )
+            goto error_exit;
+
+        if ( 1 != read(kvm_get_instance(vmi)->socket_fd, &status, 1) )
+            goto error_exit;
+
         if (0 == status) {
             goto error_exit;
         }
@@ -1249,13 +1334,12 @@ kvm_init_vmi(
 #if ENABLE_SHM_SNAPSHOT == 1
     /* get the memory size in advance for
      *  link_mmap_shm_snapshot() */
-    if (driver_get_memsize(vmi, &vmi->size) == VMI_FAILURE) {
+    if (driver_get_memsize(vmi, &vmi->allocated_ram_size, &vmi->max_physical_address) == VMI_FAILURE) {
         errprint("Failed to get memory size.\n");
         return VMI_FAILURE;
     }
 
-    dbprint(VMI_DEBUG_KVM, "**set size = %"PRIu64" [0x%"PRIx64"]\n", vmi->size,
-            vmi->size);
+    dbprint(VMI_DEBUG_KVM, "**set size = 0x%"PRIx64"\n", vmi->allocated_ram_size);
 
     if (vmi->flags & VMI_INIT_SHM_SNAPSHOT)
         return kvm_create_shm_snapshot(vmi);
@@ -1268,8 +1352,6 @@ void
 kvm_destroy(
     vmi_instance_t vmi)
 {
-    kvm_instance_t *kvm = kvm_get_instance(vmi);
-
     destroy_domain_socket(kvm_get_instance(vmi));
 
 #if ENABLE_SHM_SNAPSHOT == 1
@@ -1286,47 +1368,53 @@ kvm_destroy(
     }
 }
 
-unsigned long
+uint64_t
 kvm_get_id_from_name(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     const char *name)
 {
     virConnectPtr conn = NULL;
     virDomainPtr dom = NULL;
-    unsigned long id;
+    uint64_t domainid = VMI_INVALID_DOMID;
 
     conn =
         virConnectOpenAuth("qemu:///system", virConnectAuthPtrDefault,
                            0);
     if (NULL == conn) {
         dbprint(VMI_DEBUG_KVM, "--no connection to kvm hypervisor\n");
-        return -1;
+        return VMI_INVALID_DOMID;
     }
 
     dom = virDomainLookupByName(conn, name);
     if (NULL == dom) {
         dbprint(VMI_DEBUG_KVM, "--failed to find kvm domain\n");
-        return -1;
-    }
+        domainid = VMI_INVALID_DOMID;
+    } else {
 
-    id = (unsigned long) virDomainGetID(dom);
+        domainid = (uint64_t) virDomainGetID(dom);
+        if (domainid == (uint64_t)-1){
+            dbprint(VMI_DEBUG_KVM, "--requested kvm domain may not be running\n");
+            domainid = VMI_INVALID_DOMID;
+        }
+    }
 
     if (dom)
         virDomainFree(dom);
     if (conn)
         virConnectClose(conn);
 
-    return id;
+    return domainid;
 }
 
 status_t
 kvm_get_name_from_id(
-    vmi_instance_t vmi,
-    unsigned long domid,
+    vmi_instance_t UNUSED(vmi),
+    uint64_t domainid,
     char **name)
 {
     virConnectPtr conn = NULL;
     virDomainPtr dom = NULL;
+    const char* temp_name = NULL;
 
     conn =
         virConnectOpenAuth("qemu:///system", virConnectAuthPtrDefault,
@@ -1336,23 +1424,32 @@ kvm_get_name_from_id(
         return VMI_FAILURE;
     }
 
-    dom = virDomainLookupByID(conn, domid);
+    dom = virDomainLookupByID(conn, domainid);
     if (NULL == dom) {
         dbprint(VMI_DEBUG_KVM, "--failed to find kvm domain\n");
         return VMI_FAILURE;
     }
 
-    *name = virDomainGetName(dom);
+    temp_name = virDomainGetName(dom);
+    if (temp_name) {
+        *name = strndup(temp_name, QMP_CMD_LENGTH);
+    } else {
+        *name = NULL;
+    }
 
     if (dom)
         virDomainFree(dom);
     if (conn)
         virConnectClose(conn);
 
-    return VMI_SUCCESS;
+    if (*name) {
+        return VMI_SUCCESS;
+    }
+
+    return VMI_FAILURE;
 }
 
-unsigned long
+uint64_t
 kvm_get_id(
     vmi_instance_t vmi)
 {
@@ -1362,15 +1459,15 @@ kvm_get_id(
 void
 kvm_set_id(
     vmi_instance_t vmi,
-    unsigned long id)
+    uint64_t domainid)
 {
-    kvm_get_instance(vmi)->id = id;
+    kvm_get_instance(vmi)->id = domainid;
 }
 
 status_t
 kvm_check_id(
-    vmi_instance_t vmi,
-    unsigned long id)
+    vmi_instance_t UNUSED(vmi),
+    uint64_t domainid)
 {
     virConnectPtr conn = NULL;
     virDomainPtr dom = NULL;
@@ -1383,7 +1480,7 @@ kvm_check_id(
         return VMI_FAILURE;
     }
 
-    dom = virDomainLookupByID(conn, id);
+    dom = virDomainLookupByID(conn, domainid);
     if (NULL == dom) {
         dbprint(VMI_DEBUG_KVM, "--failed to find kvm domain\n");
         return VMI_FAILURE;
@@ -1426,7 +1523,8 @@ kvm_set_name(
 status_t
 kvm_get_memsize(
     vmi_instance_t vmi,
-    uint64_t *size)
+    uint64_t *allocated_ram_size,
+    addr_t *maximum_physical_address)
 {
     virDomainInfo info;
 
@@ -1434,7 +1532,8 @@ kvm_get_memsize(
         dbprint(VMI_DEBUG_KVM, "--failed to get vm info\n");
         goto error_exit;
     }
-    *size = info.maxMem * 1024; // convert KBytes to bytes
+    *allocated_ram_size = info.maxMem * 1024; // convert KBytes to bytes
+    *maximum_physical_address = *allocated_ram_size;
 
     return VMI_SUCCESS;
 error_exit:
@@ -1446,8 +1545,9 @@ kvm_get_vcpureg(
     vmi_instance_t vmi,
     reg_t *value,
     registers_t reg,
-    unsigned long vcpu)
+    unsigned long UNUSED(vcpu))
 {
+    // TODO: vCPU specific registers
     char *regs = NULL;
 
 #if ENABLE_SHM_SNAPSHOT == 1
@@ -1619,6 +1719,84 @@ kvm_get_vcpureg(
         case DR7:
             *value = parse_reg_value("DR7", regs);
             break;
+        case CS_SEL:
+            *value = parse_seg_reg_value("CS", regs, SEGMENT_SELECTOR);
+            break;
+        case DS_SEL:
+            *value = parse_seg_reg_value("DS", regs, SEGMENT_SELECTOR);
+            break;
+        case ES_SEL:
+            *value = parse_seg_reg_value("ES", regs, SEGMENT_SELECTOR);
+            break;
+        case FS_SEL:
+            *value = parse_seg_reg_value("FS", regs, SEGMENT_SELECTOR);
+            break;
+        case GS_SEL:
+            *value = parse_seg_reg_value("GS", regs, SEGMENT_SELECTOR);
+            break;
+        case SS_SEL:
+            *value = parse_seg_reg_value("SS", regs, SEGMENT_SELECTOR);
+            break;
+        case TR_SEL:
+            *value = parse_seg_reg_value("TR", regs, SEGMENT_SELECTOR);
+            break;
+        case LDTR_SEL:
+            *value = parse_seg_reg_value("LDT", regs, SEGMENT_SELECTOR);
+            break;
+        case CS_BASE:
+            *value = parse_seg_reg_value("CS", regs, SEGMENT_BASE);
+            break;
+        case DS_BASE:
+            *value = parse_seg_reg_value("DS", regs, SEGMENT_BASE);
+            break;
+        case ES_BASE:
+            *value = parse_seg_reg_value("ES", regs, SEGMENT_BASE);
+            break;
+        case FS_BASE:
+            *value = parse_seg_reg_value("FS", regs, SEGMENT_BASE);
+            break;
+        case GS_BASE:
+            *value = parse_seg_reg_value("GS", regs, SEGMENT_BASE);
+            break;
+        case SS_BASE:
+            *value = parse_seg_reg_value("SS", regs, SEGMENT_BASE);
+            break;
+        case TR_BASE:
+            *value = parse_seg_reg_value("TR", regs, SEGMENT_BASE);
+            break;
+        case LDTR_BASE:
+            *value = parse_seg_reg_value("LDT", regs, SEGMENT_BASE);
+            break;
+        case IDTR_BASE:
+            *value = parse_seg_reg_value("IDT", regs, SEGMENT_BASE);
+            break;
+        case GDTR_BASE:
+            *value = parse_seg_reg_value("GDT", regs, SEGMENT_BASE);
+            break;
+        case CS_ARBYTES:
+            *value = parse_seg_reg_value("CS", regs, SEGMENT_ATTR);
+            break;
+        case DS_ARBYTES:
+            *value = parse_seg_reg_value("DS", regs, SEGMENT_ATTR);
+            break;
+        case ES_ARBYTES:
+            *value = parse_seg_reg_value("ES", regs, SEGMENT_ATTR);
+            break;
+        case FS_ARBYTES:
+            *value = parse_seg_reg_value("FS", regs, SEGMENT_ATTR);
+            break;
+        case GS_ARBYTES:
+            *value = parse_seg_reg_value("GS", regs, SEGMENT_ATTR);
+            break;
+        case SS_ARBYTES:
+            *value = parse_seg_reg_value("SS", regs, SEGMENT_ATTR);
+            break;
+        case TR_ARBYTES:
+            *value = parse_seg_reg_value("TR", regs, SEGMENT_ATTR);
+            break;
+        case LDTR_ARBYTES:
+            *value = parse_seg_reg_value("LDT", regs, SEGMENT_ATTR);
+            break;
         case MSR_EFER:
             *value = parse_reg_value("EFER", regs);
             break;
@@ -1655,30 +1833,29 @@ kvm_write(
 
 int
 kvm_is_pv(
-    vmi_instance_t vmi)
+    vmi_instance_t UNUSED(vmi))
 {
     return 0;
 }
 
 status_t
 kvm_test(
-    unsigned long id,
+    uint64_t domainid,
     const char *name)
 {
-    virConnectPtr conn = NULL;
-    virDomainPtr dom = NULL;
-
-    conn =
-        virConnectOpenAuth("qemu:///system", virConnectAuthPtrDefault,
-                           0);
-    if (NULL == conn) {
-        dbprint(VMI_DEBUG_KVM, "--no connection to kvm hypervisor\n");
-        return VMI_FAILURE;
+    if (name)
+    {
+        domainid = kvm_get_id_from_name(NULL, name);
+        if (domainid != VMI_INVALID_DOMID)
+            return VMI_SUCCESS;
     }
 
-    if (conn)
-        virConnectClose(conn);
-    return VMI_SUCCESS;
+    if (domainid != VMI_INVALID_DOMID)
+    {
+        return kvm_get_name_from_id(NULL, domainid, NULL);
+    }
+
+    return VMI_FAILURE;
 }
 
 status_t
@@ -1742,7 +1919,7 @@ size_t kvm_get_dgpma(
     size_t count) {
 
     *medial_addr_ptr = kvm_get_instance(vmi)->shm_snapshot_map + paddr;
-    size_t max_size = vmi->size - (paddr - 0);
+    size_t max_size = vmi->max_physical_address - (paddr - 0);
     return max_size>count?count:max_size;
 }
 

@@ -1,3 +1,4 @@
+
 /* The LibVMI Library is an introspection library that simplifies access to
  * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
@@ -50,6 +51,11 @@ win_ver_t ntbuild2version(uint16_t ntbuildnumber)
         case 9200:
         case 9600:
             return VMI_OS_WINDOWS_8;
+        case 10240:
+        case 10586:
+        case 14393:
+        case 18432:
+            return VMI_OS_WINDOWS_10;
         default:
             break;
     }
@@ -62,8 +68,8 @@ status_t check_pdbase_offset(vmi_instance_t vmi) {
     windows_instance_t windows = vmi->os_data;
 
     if(!windows->pdbase_offset) {
-        if(windows->sysmap) {
-            if (VMI_FAILURE == windows_system_map_symbol_to_address(vmi, "_KPROCESS", "DirectoryTableBase", &windows->pdbase_offset)) {
+        if(windows->rekall_profile) {
+            if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_KPROCESS", "DirectoryTableBase", &windows->pdbase_offset)) {
                 goto done;
             }
         } else {
@@ -82,16 +88,17 @@ get_ntoskrnl_base(
     vmi_instance_t vmi,
     addr_t page_paddr)
 {
-    uint8_t page[VMI_PS_4KB];
     addr_t ret = 0;
+    access_context_t ctx = {
+        .translate_mechanism = VMI_TM_NONE,
+        .addr = page_paddr
+    };
 
-    for(; page_paddr + VMI_PS_4KB < vmi->size; page_paddr += VMI_PS_4KB) {
+    for(; ctx.addr + VMI_PS_4KB < vmi->max_physical_address; ctx.addr += VMI_PS_4KB) {
 
         uint8_t page[VMI_PS_4KB];
-        status_t rc = peparse_get_image_phys(vmi, page_paddr, VMI_PS_4KB, page);
-        if(VMI_FAILURE == rc) {
+        if(VMI_FAILURE == peparse_get_image(vmi, &ctx, VMI_PS_4KB, page))
             continue;
-        }
 
         struct pe_header *pe_header = NULL;
         struct dos_header *dos_header = NULL;
@@ -103,20 +110,20 @@ get_ntoskrnl_base(
         addr_t export_header_offset =
             peparse_get_idd_rva(IMAGE_DIRECTORY_ENTRY_EXPORT, &optional_header_type, optional_pe_header, NULL, NULL);
 
-        if(!export_header_offset || page_paddr + export_header_offset > vmi->size)
+        if(!export_header_offset || ctx.addr + export_header_offset >= vmi->max_physical_address)
             continue;
 
-        uint32_t nbytes = vmi_read_pa(vmi, page_paddr + export_header_offset, &et, sizeof(struct export_table));
+        uint32_t nbytes = vmi_read_pa(vmi, ctx.addr + export_header_offset, &et, sizeof(struct export_table));
         if(nbytes == sizeof(struct export_table) && !(et.export_flags || !et.name) ) {
 
-            if(page_paddr + et.name + 12 > vmi->size) {
+            if(ctx.addr + et.name + 12 >= vmi->max_physical_address) {
                 continue;
             }
 
             unsigned char name[13] = {0};
-            vmi_read_pa(vmi, page_paddr + et.name, name, 12);
+            vmi_read_pa(vmi, ctx.addr + et.name, name, 12);
             if(!strcmp("ntoskrnl.exe", (char*)name)) {
-                ret = page_paddr;
+                ret = ctx.addr;
                 break;
             }
         } else {
@@ -449,6 +456,11 @@ void windows_read_config_ghashtable_entries(char* key, gpointer value,
         goto _done;
     }
 
+    if (strncmp(key, "win_ntoskrnl_va", CONFIG_STR_LENGTH) == 0) {
+        windows_instance->ntoskrnl_va = *(addr_t *)value;
+        goto _done;
+    }
+
     if (strncmp(key, "win_tasks", CONFIG_STR_LENGTH) == 0) {
         windows_instance->tasks_offset = *(int *)value;
         goto _done;
@@ -493,8 +505,14 @@ void windows_read_config_ghashtable_entries(char* key, gpointer value,
         goto _done;
     }
 
+    /* Deprecated way of using Rekall profiles */
     if (strncmp(key, "sysmap", CONFIG_STR_LENGTH) == 0) {
-        windows_instance->sysmap = g_strdup((char *)value);
+        windows_instance->rekall_profile = g_strdup((char *)value);
+        goto _done;
+    }
+
+    if (strncmp(key, "rekall_profile", CONFIG_STR_LENGTH) == 0) {
+        windows_instance->rekall_profile = g_strdup((char *)value);
         goto _done;
     }
 
@@ -512,30 +530,78 @@ void windows_read_config_ghashtable_entries(char* key, gpointer value,
 }
 
 static status_t
-init_from_sysmap(vmi_instance_t vmi)
+get_kpgd_from_rekall_profile(vmi_instance_t vmi)
 {
-
     status_t ret = VMI_FAILURE;
     windows_instance_t windows = vmi->os_data;
-    dbprint(VMI_DEBUG_MISC, "**Trying to init from sysmap\n");
+    addr_t sysproc_pointer_rva = 0;
+    addr_t sysproc_pdbase_addr = 0;
+
+    /* The kernel base and the pdbase offset should have already been found
+     * and vmi->kpgd should be holding a CR3 value */
+    if( !windows->rekall_profile || !windows->ntoskrnl || !windows->pdbase_offset || !vmi->kpgd )
+        return ret;
+
+    dbprint(VMI_DEBUG_MISC, "**Getting kernel page directory from Rekall profile\n");
+
+    if ( !windows->sysproc )
+    {
+        ret = rekall_profile_symbol_to_rva(windows->rekall_profile, "PsInitialSystemProcess", NULL, &sysproc_pointer_rva);
+        if ( VMI_FAILURE == ret )
+            return ret;
+
+        ret = vmi_read_addr_pa(vmi, windows->ntoskrnl + sysproc_pointer_rva, &windows->sysproc);
+        if ( VMI_FAILURE == ret )
+            return ret;
+
+        dbprint(VMI_DEBUG_MISC, "**Found PsInitialSystemProcess at 0x%lx\n", windows->sysproc);
+    }
+
+    sysproc_pdbase_addr = vmi_pagetable_lookup(vmi, vmi->kpgd, windows->sysproc + windows->pdbase_offset);
+    if ( !sysproc_pdbase_addr )
+        return VMI_FAILURE;
+
+    ret = vmi_read_addr_pa(vmi, sysproc_pdbase_addr, &vmi->kpgd);
+    if ( ret == VMI_SUCCESS && vmi->kpgd )
+        return VMI_SUCCESS;
+
+    return VMI_FAILURE;
+}
+
+static status_t
+init_from_rekall_profile(vmi_instance_t vmi)
+{
+    status_t ret = VMI_FAILURE;
+    windows_instance_t windows = vmi->os_data;
+    dbprint(VMI_DEBUG_MISC, "**Trying to init from Rekall profile\n");
 
     reg_t kpcr = 0;
     addr_t kpcr_rva = 0;
 
-    if(vmi->mode != VMI_FILE) {
+    // try to find the kernel if we are not connecting to a file and the kernel pa/va were not already specified.
+    if(vmi->mode != VMI_FILE && ! ( windows->ntoskrnl && windows->ntoskrnl_va ) ) {
 
-        if (vmi->page_mode == VMI_PM_IA32E) {
-            if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, GS_BASE, 0)) {
+        switch ( vmi->page_mode ) {
+            case VMI_PM_IA32E:
+                if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, GS_BASE, 0))
+                    goto done;
+                break;
+            case VMI_PM_LEGACY: /* Fall-through */
+            case VMI_PM_PAE:
+                if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, FS_BASE, 0))
+                    goto done;
+                break;
+            default:
+                goto done;
+        };
+
+        if (VMI_SUCCESS == rekall_profile_symbol_to_rva(windows->rekall_profile, "KiInitialPCR", NULL, &kpcr_rva)) {
+            if ( kpcr <= kpcr_rva || (vmi->page_mode == VMI_PM_IA32E && kpcr < 0xffff800000000000) ) {
+                dbprint(VMI_DEBUG_MISC, "**vCPU0 doesn't seem to have KiInitialPCR mapped, can't init from Rekall profile.\n");
                 goto done;
             }
-        } else if (vmi->page_mode == VMI_PM_LEGACY || vmi->page_mode == VMI_PM_PAE) {
-            if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, FS_BASE, 0)) {
-                goto done;
-            }
-        }
 
-        if (VMI_SUCCESS == windows_system_map_symbol_to_address(vmi, "KiInitialPCR", NULL, &kpcr_rva)) {
-            // If the sysmap has KiInitialPCR we have Win 7+
+            // If the Rekall profile has KiInitialPCR we have Win 7+
             windows->ntoskrnl_va = kpcr - kpcr_rva;
             windows->ntoskrnl = vmi_translate_kv2p(vmi, windows->ntoskrnl_va);
         } else if(kpcr == 0x00000000ffdff000) {
@@ -543,10 +609,16 @@ init_from_sysmap(vmi_instance_t vmi)
             // at this VA (XP/Vista) and the KPCR trick [1] is still valid.
             // [1] http://moyix.blogspot.de/2008/04/finding-kernel-global-variables-in.html
             addr_t kdvb = 0, kdvb_offset = 0, kernbase_offset = 0;
-            windows_system_map_symbol_to_address(vmi, "_KPCR", "KdVersionBlock", &kdvb_offset);
-            windows_system_map_symbol_to_address(vmi, "_DBGKD_GET_VERSION64", "KernBase", &kernbase_offset);
-            vmi_read_addr_va(vmi, kpcr+kdvb_offset, 0, &kdvb);
-            vmi_read_addr_va(vmi, kdvb+kernbase_offset, 0, &windows->ntoskrnl_va);
+
+            if ( VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_KPCR", "KdVersionBlock", &kdvb_offset) )
+                goto done;
+            if ( VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_DBGKD_GET_VERSION64", "KernBase", &kernbase_offset) )
+                goto done;
+            if ( VMI_FAILURE == vmi_read_addr_va(vmi, kpcr+kdvb_offset, 0, &kdvb) )
+                goto done;
+            if ( VMI_FAILURE == vmi_read_addr_va(vmi, kdvb+kernbase_offset, 0, &windows->ntoskrnl_va) )
+                goto done;
+
             windows->ntoskrnl = vmi_translate_kv2p(vmi, windows->ntoskrnl_va);
         } else {
             goto done;
@@ -554,6 +626,15 @@ init_from_sysmap(vmi_instance_t vmi)
 
         dbprint(VMI_DEBUG_MISC, "**KernBase PA=0x%"PRIx64"\n", windows->ntoskrnl);
 
+        /*
+         * If the CR3 value points to a pagetable that hasn't been setup yet
+         * we need to resort to finding a valid pagetable the old fashioned way.
+         */
+        if (windows->ntoskrnl_va && !windows->ntoskrnl)
+        {
+            windows_find_cr3(vmi);
+            windows->ntoskrnl = vmi_translate_kv2p(vmi, windows->ntoskrnl_va);
+        }
     }
 
     // This could happen if we are in file mode or for Win XP
@@ -563,17 +644,21 @@ init_from_sysmap(vmi_instance_t vmi)
 
         // get KdVersionBlock/"_DBGKD_GET_VERSION64"->KernBase
         addr_t kdvb = 0, kernbase_offset = 0;
-        windows_system_map_symbol_to_address(vmi, "KdVersionBlock", NULL, &kdvb);
-        windows_system_map_symbol_to_address(vmi, "_DBGKD_GET_VERSION64", "KernBase", &kernbase_offset);
+        if ( VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "KdVersionBlock", NULL, &kdvb) )
+            goto done;
+        if ( VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_DBGKD_GET_VERSION64", "KernBase", &kernbase_offset) )
+            goto done;
 
         dbprint(VMI_DEBUG_MISC, "**KdVersionBlock RVA 0x%lx. KernBase RVA: 0x%lx\n", kdvb, kernbase_offset);
         dbprint(VMI_DEBUG_MISC, "**KernBase PA=0x%"PRIx64"\n", windows->ntoskrnl);
 
         if (windows->ntoskrnl && kdvb && kernbase_offset) {
-            vmi_read_addr_pa(vmi, windows->ntoskrnl + kdvb + kernbase_offset, &windows->ntoskrnl_va);
+            if ( VMI_FAILURE == vmi_read_addr_pa(vmi, windows->ntoskrnl + kdvb + kernbase_offset, &windows->ntoskrnl_va) )
+                goto done;
 
             if(!windows->ntoskrnl_va) {
-                vmi_read_32_pa(vmi, windows->ntoskrnl + kdvb + kernbase_offset, (uint32_t*)&windows->ntoskrnl_va);
+                if ( VMI_FAILURE == vmi_read_32_pa(vmi, windows->ntoskrnl + kdvb + kernbase_offset, (uint32_t*)&windows->ntoskrnl_va) )
+                    goto done;
             }
 
             if(!windows->ntoskrnl_va) {
@@ -592,7 +677,7 @@ init_from_sysmap(vmi_instance_t vmi)
     uint16_t ntbuildnumber = 0;
 
     // Let's do some sanity checking
-    if (VMI_FAILURE == windows_system_map_symbol_to_address(vmi, "NtBuildNumber", NULL, &ntbuildnumber_rva)) {
+    if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "NtBuildNumber", NULL, &ntbuildnumber_rva)) {
         goto done;
     }
     if (VMI_FAILURE == vmi_read_16_pa(vmi, windows->ntoskrnl + ntbuildnumber_rva, &ntbuildnumber)) {
@@ -600,34 +685,33 @@ init_from_sysmap(vmi_instance_t vmi)
     }
 
     if (ntbuild2version(ntbuildnumber) == VMI_OS_WINDOWS_UNKNOWN) {
-        dbprint(VMI_DEBUG_MISC, "Unknown Windows NtBuildNumber: %u. The Rekall Profile may be incorrect for this Windows!\n", ntbuildnumber);
-        goto done;
+        dbprint(VMI_DEBUG_MISC, "Unknown Windows NtBuildNumber: %u, the Rekall Profile may be incorrect for this Windows!\n", ntbuildnumber);
     }
 
     // The system map seems to be good, lets grab all the required offsets
     if(!windows->pdbase_offset) {
-        if (VMI_FAILURE == windows_system_map_symbol_to_address(vmi, "_KPROCESS", "DirectoryTableBase", &windows->pdbase_offset)) {
+        if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_KPROCESS", "DirectoryTableBase", &windows->pdbase_offset)) {
             goto done;
         }
     }
     if(!windows->tasks_offset) {
-        if (VMI_FAILURE == windows_system_map_symbol_to_address(vmi, "_EPROCESS", "ActiveProcessLinks", &windows->tasks_offset)) {
+        if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "ActiveProcessLinks", &windows->tasks_offset)) {
             goto done;
         }
     }
     if(!windows->pid_offset) {
-        if (VMI_FAILURE == windows_system_map_symbol_to_address(vmi, "_EPROCESS", "UniqueProcessId", &windows->pid_offset)) {
+        if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "UniqueProcessId", &windows->pid_offset)) {
             goto done;
         }
     }
     if(!windows->pname_offset) {
-        if (VMI_FAILURE == windows_system_map_symbol_to_address(vmi, "_EPROCESS", "ImageFileName", &windows->pname_offset)) {
+        if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "ImageFileName", &windows->pname_offset)) {
             goto done;
         }
     }
 
     ret = VMI_SUCCESS;
-    dbprint(VMI_DEBUG_MISC, "**init from sysmap success\n");
+    dbprint(VMI_DEBUG_MISC, "**init from Rekall profile success\n");
 
     done: return ret;
 
@@ -637,12 +721,16 @@ static status_t
 init_core(vmi_instance_t vmi)
 {
     windows_instance_t windows = vmi->os_data;
+    status_t ret = VMI_FAILURE;
 
-    if (windows->sysmap) {
-        return init_from_sysmap(vmi);
-    } else {
-        return init_from_kdbg(vmi);
-    }
+    if (windows->rekall_profile)
+        ret = init_from_rekall_profile(vmi);
+
+    /* Fall be here too if the Rekall profile based init fails */
+    if ( VMI_FAILURE == ret )
+        ret = init_from_kdbg(vmi);
+
+    return ret;
 }
 
 status_t
@@ -679,7 +767,7 @@ windows_init(
     os_interface->os_pgd_to_pid = windows_pgd_to_pid;
     os_interface->os_ksym2v = windows_kernel_symbol_to_address;
     os_interface->os_usym2rva = windows_export_to_rva;
-    os_interface->os_rva2sym = windows_rva_to_export;
+    os_interface->os_v2sym = windows_rva_to_export;
     os_interface->os_read_unicode_struct = windows_read_unicode_struct;
     os_interface->os_teardown = windows_teardown;
 
@@ -714,6 +802,12 @@ windows_init(
     }
 
     if (VMI_SUCCESS == real_kpgd_found) {
+        status = VMI_SUCCESS;
+        goto done;
+    }
+
+    if ( VMI_SUCCESS == get_kpgd_from_rekall_profile(vmi) ) {
+        dbprint(VMI_DEBUG_MISC, "--kpgd from rekall profile success\n");
         status = VMI_SUCCESS;
         goto done;
     }
@@ -757,7 +851,7 @@ status_t windows_teardown(vmi_instance_t vmi) {
         goto done;
     }
 
-    g_free(windows->sysmap);
+    g_free(windows->rekall_profile);
 
     free(vmi->os_data);
     vmi->os_data = NULL;

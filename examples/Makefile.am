@@ -1,9 +1,15 @@
 ## Source directory
 
-SUBDIRS = 
+SUBDIRS =
 
-AM_CFLAGS = -I$(top_builddir) $(GLIB_CFLAGS)
-AM_CPPFLAGS = -I$(top_builddir) $(GLIB_CFLAGS)
+AM_CFLAGS = -I$(top_srcdir) $(GLIB_CFLAGS)
+AM_CFLAGS += -Wall -Wextra
+
+if DEBUG
+AM_CFLAGS += -Werror
+AM_CFLAGS += -Wno-missing-field-initializers -Wno-unused-parameter
+endif
+
 AM_LDFLAGS = -L$(top_builddir)/libvmi/.libs/
 LDADD = -lvmi -lm $(LIBS) $(GLIB_LIBS)
 
@@ -19,7 +25,8 @@ bin_PROGRAMS =  module-list \
                 singlestep-event-example \
                 interrupt-event-example \
                 step-event-example \
-                va-pages
+                va-pages \
+                xen-emulate-response
 
 module_list_SOURCES = module-list.c
 process_list_SOURCES = process-list.c
@@ -34,3 +41,4 @@ interrupt_event_example_SOURCES = interrupt-event-example.c
 win_guid_SOURCES = win-guid.c win-guid.h
 step_event_example_SOURCES = step-event-example.c
 va_pages_SOURCES = va-pages.c
+xen_emulate_response_SOURCES = xen-emulate-response.c

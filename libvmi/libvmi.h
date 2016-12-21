@@ -75,7 +75,7 @@ typedef uint32_t vmi_mode_t;
 
 #define VMI_CONFIG_GHASHTABLE (1 << 27) /**< config GHashTable provided */
 
-#define VMI_INVALID_DOMID ~0 /**< invalid domain id */
+#define VMI_INVALID_DOMID ~0ULL /**< invalid domain id */
 
 typedef enum status {
 
@@ -93,6 +93,12 @@ typedef enum os {
     VMI_OS_WINDOWS   /**< OS type is Windows */
 } os_t;
 
+/**
+ * Windows version enumeration. The values of the enum
+ * represent the size of KDBG structure up to Windows 8.
+ * At Windows 10 the KDBG based scan is no longer supported
+ * and thus at that point the value itself has no magic value.
+ */
 typedef enum win_ver {
 
     VMI_OS_WINDOWS_NONE,    /**< Not Windows */
@@ -104,7 +110,8 @@ typedef enum win_ver {
     VMI_OS_WINDOWS_VISTA    = 0x0328U, /**< Magic value for Windows Vista */
     VMI_OS_WINDOWS_2008     = 0x0330U, /**< Magic value for Windows 2008 */
     VMI_OS_WINDOWS_7        = 0x0340U, /**< Magic value for Windows 7 */
-    VMI_OS_WINDOWS_8        = 0x0360U  /**< Magic value for Windows 8 */
+    VMI_OS_WINDOWS_8        = 0x0360U, /**< Magic value for Windows 8 */
+    VMI_OS_WINDOWS_10,
 } win_ver_t;
 
 typedef enum page_mode {
@@ -117,7 +124,9 @@ typedef enum page_mode {
 
     VMI_PM_IA32E,   /**< x86 IA-32e paging */
 
-    VMI_PM_AARCH32  /**< ARM 32-bit paging */
+    VMI_PM_AARCH32, /**< ARM 32-bit paging */
+
+    VMI_PM_AARCH64  /**< ARM 64-bit paging */
 } page_mode_t;
 
 typedef enum page_size {
@@ -127,6 +136,8 @@ typedef enum page_size {
     VMI_PS_1KB      = 0x400ULL,     /**< 1KB */
 
     VMI_PS_4KB      = 0x1000ULL,    /**< 4KB */
+
+    VMI_PS_16KB     = 0x4000ULL,    /**< 16KB */
 
     VMI_PS_64KB     = 0x10000ULL,   /**< 64KB */
 
@@ -138,165 +149,232 @@ typedef enum page_size {
 
     VMI_PS_16MB     = 0x1000000ULL, /**< 16MB */
 
-    VMI_PS_1GB      = 0x4000000ULL  /**< 1GB */
+    VMI_PS_32MB     = 0x2000000ULL, /**< 32MB */
+
+    VMI_PS_512MB    = 0x2000000ULL,  /**< 512MB */
+
+    VMI_PS_1GB      = 0x4000000ULL,  /**< 1GB */
 
 } page_size_t;
 
 typedef uint64_t reg_t;
-typedef enum registers {
-    /**
-     * x86* registers
-     */
-    RAX,
-    RBX,
-    RCX,
-    RDX,
-    RBP,
-    RSI,
-    RDI,
-    RSP,
-    R8,
-    R9,
-    R10,
-    R11,
-    R12,
-    R13,
-    R14,
-    R15,
+typedef reg_t registers_t;
 
-    RIP,
-    RFLAGS,
+/**
+ * The following definitions are used where the API defines
+ * either reg_t or registers_t.
+ *
+ * x86_* registers
+ */
+#define EAX              0
+#define EBX              1
+#define ECX              2
+#define EDX              3
+#define EBP              4
+#define ESI              5
+#define EDI              6
+#define ESP              7
 
-    CR0,
-    CR2,
-    CR3,
-    CR4,
+#define EIP              8
+#define EFLAGS           9
 
-    DR0,
-    DR1,
-    DR2,
-    DR3,
-    DR6,
-    DR7,
+#define RAX        EAX
+#define RBX        EBX
+#define RCX        ECX
+#define RDX        EDX
+#define RBP        EBP
+#define RSI        ESI
+#define RDI        EDI
+#define RSP        ESP
 
-    CS_SEL,
-    DS_SEL,
-    ES_SEL,
-    FS_SEL,
-    GS_SEL,
-    SS_SEL,
-    TR_SEL,
-    LDTR_SEL,
+#define RIP        EIP
+#define RFLAGS     EFLAGS
 
-    CS_LIMIT,
-    DS_LIMIT,
-    ES_LIMIT,
-    FS_LIMIT,
-    GS_LIMIT,
-    SS_LIMIT,
-    TR_LIMIT,
-    LDTR_LIMIT,
-    IDTR_LIMIT,
-    GDTR_LIMIT,
+#define R8               10
+#define R9               11
+#define R10              12
+#define R11              13
+#define R12              14
+#define R13              15
+#define R14              16
+#define R15              17
 
-    CS_BASE,
-    DS_BASE,
-    ES_BASE,
-    FS_BASE,
-    GS_BASE,
-    SS_BASE,
-    TR_BASE,
-    LDTR_BASE,
-    IDTR_BASE,
-    GDTR_BASE,
+#define CR0              18
+#define CR2              19
+#define CR3              20
+#define CR4              21
+#define XCR0             22
 
-    CS_ARBYTES,
-    DS_ARBYTES,
-    ES_ARBYTES,
-    FS_ARBYTES,
-    GS_ARBYTES,
-    SS_ARBYTES,
-    TR_ARBYTES,
-    LDTR_ARBYTES,
+#define DR0              23
+#define DR1              24
+#define DR2              25
+#define DR3              26
+#define DR6              27
+#define DR7              28
 
-    SYSENTER_CS,
-    SYSENTER_ESP,
-    SYSENTER_EIP,
+#define CS_SEL           29
+#define DS_SEL           30
+#define ES_SEL           31
+#define FS_SEL           32
+#define GS_SEL           33
+#define SS_SEL           34
+#define TR_SEL           35
+#define LDTR_SEL         36
 
-    SHADOW_GS,
+#define CS_LIMIT         37
+#define DS_LIMIT         38
+#define ES_LIMIT         39
+#define FS_LIMIT         40
+#define GS_LIMIT         41
+#define SS_LIMIT         42
+#define TR_LIMIT         43
+#define LDTR_LIMIT       44
+#define IDTR_LIMIT       45
+#define GDTR_LIMIT       46
 
-    MSR_FLAGS,
-    MSR_LSTAR,
-    MSR_CSTAR,
-    MSR_SYSCALL_MASK,
-    MSR_EFER,
-    MSR_TSC_AUX,
+#define CS_BASE          47
+#define DS_BASE          48
+#define ES_BASE          49
+#define FS_BASE          50
+#define GS_BASE          51
+#define SS_BASE          52
+#define TR_BASE          53
+#define LDTR_BASE        54
+#define IDTR_BASE        55
+#define GDTR_BASE        56
 
-    /**
-     * Special generic case for handling MSRs, given their understandably
-     * generic treatment for events in Xen and elsewhere. Not relevant for
-     * vCPU get/set of register data.
-     */
-    MSR_ALL,
+#define CS_ARBYTES       57
+#define DS_ARBYTES       58
+#define ES_ARBYTES       59
+#define FS_ARBYTES       60
+#define GS_ARBYTES       61
+#define SS_ARBYTES       62
+#define TR_ARBYTES       63
+#define LDTR_ARBYTES     64
 
-    TSC,
+#define SYSENTER_CS      65
+#define SYSENTER_ESP     66
+#define SYSENTER_EIP     67
 
-    /**
-     * ARM32 Registers
-     */
-    SCTLR,
+#define SHADOW_GS        68
+#define TSC              69
 
-    TTBCR,
-    TTBR0,
-    TTBR1,
+#define MSR_FLAGS        70
+#define MSR_LSTAR        71
+#define MSR_CSTAR        72
+#define MSR_SYSCALL_MASK 73
+#define MSR_EFER         74
+#define MSR_TSC_AUX      75
 
-    R0_USR,
-    R1_USR,
-    R2_USR,
-    R3_USR,
-    R4_USR,
-    R5_USR,
-    R6_USR,
-    R7_USR,
-    R8_USR,
-    R9_USR,
-    R10_USR,
-    R11_USR,
-    R12_USR,
+/**
+ * Special generic case for handling MSRs, given their understandably
+ * generic treatment for events in Xen and elsewhere. Not relevant for
+ * vCPU get/set of register data.
+ */
+#define MSR_ALL          76
 
-    SP_USR,
-    LR_USR,
+/**
+ * ARM32 Registers
+ */
+#define SCTLR            77
+#define CPSR             78
 
-    LR_IRQ,
-    SP_IRQ,
+#define TTBCR            79
+#define TTBR0            80
+#define TTBR1            81
 
-    LR_SVC,
-    SP_SVC,
+#define R0               82
+#define R1               83
+#define R2               84
+#define R3               85
+#define R4               86
+#define R5               87
+#define R6               88
+#define R7               89
 
-    LR_ABT,
-    SP_ABT,
+/* R8-R15 already defined */
 
-    LR_UND,
-    SP_UND,
+#define SPSR_SVC         90
+#define SPSR_FIQ         91
+#define SPSR_IRQ         92
+#define SPSR_UND         93
+#define SPSR_ABT         94
 
-    R8_FIQ,
-    R9_FIQ,
-    R10_FIQ,
-    R11_FIQ,
-    R12_FIQ,
+#define LR_IRQ           95
+#define SP_IRQ           96
 
-    SP_FIQ,
-    LR_FIQ,
+#define LR_SVC           97
+#define SP_SVC           98
 
-    PC32,
+#define LR_ABT           99
+#define SP_ABT           100
 
-    SPSR_SVC,
+#define LR_UND           101
+#define SP_UND           102
 
-    SPSR_FIQ,
-    SPSR_IRQ,
-    SPSR_UND,
-    SPSR_ABT
-} registers_t;
+#define R8_FIQ           103
+#define R9_FIQ           104
+#define R10_FIQ          105
+#define R11_FIQ          106
+#define R12_FIQ          107
+
+#define SP_FIQ           108
+#define LR_FIQ           109
+
+#define PC               118
+
+/**
+ * Compatibility naming
+ */
+#define SP_USR      R13
+#define LR_USR      R14
+#define PC32        PC
+
+/**
+ * ARM64 register
+ */
+#define SP_EL0           110
+#define SP_EL1           111
+#define ELR_EL1          112
+
+/**
+ * Many ARM64 registers are architecturally mapped over ARM32 registers
+ */
+#define X0          R0
+#define X1          R1
+#define X2          R2
+#define X3          R3
+#define X4          R4
+#define X5          R5
+#define X6          R6
+#define X7          R7
+#define X8          R8
+#define X9          R9
+#define X10         R10
+#define X11         R11
+#define X12         R12
+#define X13         R13
+#define X14         R14
+#define X15         R15
+#define X16         LR_IRQ
+#define X17         SP_IRQ
+#define X18         LR_SVC
+#define X19         SP_SVC
+#define X20         LR_ABT
+#define X21         SP_ABT
+#define X22         LR_UND
+#define X23         SP_UND
+#define X24         R8_FIQ
+#define X25         R9_FIQ
+#define X26         R10_FIQ
+#define X27         R11_FIQ
+#define X28         R12_FIQ
+#define X29         SP_FIQ
+#define X30         LR_FIQ
+
+#define PC64        PC
+#define SPSR_EL1    SPSR_SVC
+#define TCR_EL1     TTBCR
 
 /**
  * typedef for forward compatibility with 64-bit guests
@@ -351,6 +429,17 @@ typedef struct page_info {
             uint32_t sld_location;
             uint32_t sld_value;
         } arm_aarch32;
+
+        struct {
+            uint64_t zld_location;
+            uint64_t zld_value;
+            uint64_t fld_location;
+            uint64_t fld_value;
+            uint64_t sld_location;
+            uint64_t sld_value;
+            uint64_t tld_location;
+            uint64_t tld_value;
+        } arm_aarch64;
     };
 } page_info_t;
 
@@ -364,6 +453,17 @@ typedef enum translation_mechanism {
     VMI_TM_PROCESS_PID,     /**< Translate addr by finding process first to use its DTB. */
     VMI_TM_KERNEL_SYMBOL    /**< Find virtual address of kernel symbol and translate it via kernel DTB. */
 } translation_mechanism_t;
+
+/**
+ * Supported architectures by LibVMI
+ */
+typedef enum arch {
+    VMI_ARCH_UNKNOWN,        /**< Unknown architecture */
+    VMI_ARCH_X86,            /**< x86 32-bit architecture */
+    VMI_ARCH_X86_64,         /**< x86 64-bit architecture */
+    VMI_ARCH_ARM32,          /**< ARM 32-bit architecture */
+    VMI_ARCH_ARM64           /**< ARM 64-bit architecture */
+} vmi_arch_t;
 
 /**
  * Structure to use as input to accessor functions
@@ -521,6 +621,14 @@ page_mode_t vmi_init_paging(
 status_t vmi_destroy(
     vmi_instance_t vmi);
 
+/**
+ * Obtain the library arch mode that was used for compiling.
+ *
+ * @param[in] vmi LibVMI instance
+ * @return The architecture of the library
+ */
+vmi_arch_t vmi_get_library_arch();
+
 /*---------------------------------------------------------
  * Memory translation functions from memory.c
  */
@@ -568,32 +676,30 @@ addr_t vmi_translate_ksym2v(
  * Linux is unimplemented at this time.
  *
  * @param[in] vmi LibVMI instance
- * @param[in] base_vaddr Base virtual address (beginning of PE header in Windows)
- * @param[in] pid PID
+ * @param[in] ctx Access context (beginning of PE header in Windows)
  * @param[in] symbol Desired symbol to translate
  * @return Virtual address, or zero on error
  */
 addr_t vmi_translate_sym2v(
     vmi_instance_t vmi,
-    addr_t base_vaddr,
-    vmi_pid_t pid,
-    char *symbol);
+    const access_context_t *ctx,
+    const char *symbol);
 
 /**
  * Performs the translation from an RVA to a symbol
  * On Windows this function walks the PE export table.
- * Linux is unimplemented at this time.
+ * The Linux translation works currently only for kernel symbols (pid=0 & base_vaddr=0).
+ * Only the first matching symbol of System.map is returned.
+ * ELF Headers are not supported.
  *
  * @param[in] vmi LibVMI instance
- * @param[in] base_vaddr Base virtual address (beginning of PE header in Windows)
- * @param[in] pid PID
+ * @param[in] ctx Access context (beginning of PE header in Windows)
  * @param[in] rva RVA to translate
  * @return Symbol, or NULL on error
  */
 const char* vmi_translate_v2sym(
     vmi_instance_t vmi,
-    addr_t base_vaddr,
-    vmi_pid_t pid,
+    const access_context_t *ctx,
     addr_t rva);
 
 /**
@@ -669,7 +775,7 @@ status_t vmi_pagetable_lookup_extended(
  */
 size_t vmi_read(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     void *buf,
     size_t count);
 
@@ -683,7 +789,7 @@ size_t vmi_read(
  */
 status_t vmi_read_8(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint8_t * value);
 
 /**
@@ -696,7 +802,7 @@ status_t vmi_read_8(
  */
 status_t vmi_read_16(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint16_t * value);
 
 /**
@@ -709,7 +815,7 @@ status_t vmi_read_16(
  */
 status_t vmi_read_32(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint32_t * value);
 
 /**
@@ -723,7 +829,7 @@ status_t vmi_read_32(
  */
 status_t vmi_read_64(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint64_t * value);
 
 /**
@@ -737,7 +843,7 @@ status_t vmi_read_64(
  */
 status_t vmi_read_addr(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     addr_t *value);
 
 /**
@@ -751,7 +857,21 @@ status_t vmi_read_addr(
  */
 char *vmi_read_str(
     vmi_instance_t vmi,
-    access_context_t *ctx);
+    const access_context_t *ctx);
+
+/**
+ * Reads a Unicode string from the given address. If the guest is running
+ * Windows, a UNICODE_STRING struct is read. Linux is not yet
+ * supported. The returned value must be freed by the caller.
+ *
+ * @param[in] vmi LibVMI instance
+ * @param[in] ctx Access context
+ * @return String read from memory or NULL on error; this function
+ *         will set the encoding field.
+ */
+unicode_string_t *vmi_read_unicode_str(
+    vmi_instance_t vmi,
+    const access_context_t *ctx);
 
 /**
  * Reads \a count bytes from memory located at the kernel symbol \a sym
@@ -1104,7 +1224,7 @@ char *vmi_read_str_pa(
  */
 size_t vmi_write(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     void *buf,
     size_t count);
 
@@ -1168,7 +1288,7 @@ size_t vmi_write_pa(
  */
 status_t vmi_write_8(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint8_t * value);
 
 /**
@@ -1181,7 +1301,7 @@ status_t vmi_write_8(
  */
 status_t vmi_write_16(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint16_t * value);
 
 /**
@@ -1194,7 +1314,7 @@ status_t vmi_write_16(
  */
 status_t vmi_write_32(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint32_t * value);
 
 /**
@@ -1207,7 +1327,7 @@ status_t vmi_write_32(
  */
 status_t vmi_write_64(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint64_t * value);
 
 /**
@@ -1221,7 +1341,7 @@ status_t vmi_write_64(
  */
 status_t vmi_write_addr(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     addr_t * value);
 
 /**
@@ -1511,7 +1631,7 @@ char *vmi_get_name(
  * @param[in] vmi LibVMI instance
  * @return VM id, or zero on error
  */
-unsigned long vmi_get_vmid(
+uint64_t vmi_get_vmid(
     vmi_instance_t vmi);
 
 /**
@@ -1608,12 +1728,13 @@ win_ver_t vmi_get_winver_manual(
  */
 uint64_t vmi_get_offset(
     vmi_instance_t vmi,
-    char *offset_name);
+    const char *offset_name);
 
 /**
  * Gets the memory size of the guest or file that LibVMI is currently
- * accessing.  This is effectively the max physical address that you
- * can access in the system.
+ * accessing.  This is the amount of RAM allocated to the guest, but
+ * does not necessarily indicate the highest addressable physical address;
+ * get_max_physical_address() should be used.
  *
  * NOTE: if memory ballooning alters the allocation of memory to a
  *  VM after vmi_init, this information will have become stale
@@ -1623,6 +1744,22 @@ uint64_t vmi_get_offset(
  * @return Memory size
  */
 uint64_t vmi_get_memsize(
+    vmi_instance_t vmi);
+
+/**
+ * Gets highest addressable physical memory address of the guest or file that
+ * LibVMI is currently accessing plus one.  That is, any address less then the
+ * returned value "may be" a valid physical memory address, but the layout of
+ * the guest RAM is hypervisor specific, so there can and will be holes that
+ * are not memory pages and can't be read by libvmi.
+ *
+ * NOTE: if memory ballooning alters the allocation of memory to a VM after
+ *  vmi_init, this information will have become stale and a re-initialization
+ *  will be required.
+ *
+ * @param[in] vmi LibVMI instance @return physical memory size
+ */
+addr_t vmi_get_max_physical_address(
     vmi_instance_t vmi);
 
 /**
@@ -1798,6 +1935,14 @@ void vmi_pidcache_add(
     vmi_instance_t vmi,
     vmi_pid_t pid,
     addr_t dtb);
+
+/**
+ * Returns the path of the Linux system map file for the given vmi instance
+ *
+ * @param[in] vmi LibVMI instance
+ * @return String file path location of the Linux system map
+ */
+const char * vmi_get_linux_sysmap(vmi_instance_t vmi);
 
 #pragma GCC visibility pop
 

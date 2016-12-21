@@ -75,33 +75,15 @@ memory_cache_entry_free(
 }
 
 static void
-remove_entry(
-    gpointer key,
-    gpointer cache)
-{
-    GHashTable *memory_cache = cache;
-
-    g_hash_table_remove(memory_cache, key);
-    free(key);
-}
-
-static void
 clean_cache(
     vmi_instance_t vmi)
 {
-    GList *list = NULL;
+    while (g_queue_get_length(vmi->memory_cache_lru) > vmi->memory_cache_size_max / 2) {
+        gint64 *paddr = g_queue_pop_tail(vmi->memory_cache_lru);
 
-    while (vmi->memory_cache_size > vmi->memory_cache_size_max / 2) {
-        GList *last = g_list_last(vmi->memory_cache_lru);
-
-        vmi->memory_cache_lru =
-            g_list_remove_link(vmi->memory_cache_lru, last);
-        list = g_list_concat(list, last);
-
-        vmi->memory_cache_size--;
+        g_hash_table_remove(vmi->memory_cache, paddr);
+        g_free(paddr);
     }
-    g_list_foreach(list, remove_entry, vmi->memory_cache);
-    g_list_free(list);
 
     dbprint(VMI_DEBUG_MEMCACHE, "--MEMORY cache cleanup round complete (cache size = %u)\n",
             g_hash_table_size(vmi->memory_cache));
@@ -121,11 +103,11 @@ validate_and_return_data(
         entry->data = get_memory_data(vmi, entry->paddr, entry->length);
         entry->last_updated = now;
 
-        GList* lru_entry = g_list_find_custom(vmi->memory_cache_lru,
+        GList* lru_entry = g_queue_find_custom(vmi->memory_cache_lru,
                 &entry->paddr, g_int64_equal);
-        vmi->memory_cache_lru = g_list_remove_link(vmi->memory_cache_lru,
+        g_queue_unlink(vmi->memory_cache_lru,
                 lru_entry);
-        vmi->memory_cache_lru = g_list_concat(lru_entry, vmi->memory_cache_lru);
+        g_queue_push_head_link(vmi->memory_cache_lru, lru_entry);
     }
     entry->last_used = now;
     return entry->data;
@@ -144,11 +126,11 @@ static memory_cache_entry_t create_new_entry (vmi_instance_t vmi, addr_t paddr,
     //
     // TODO: perform other reasonable checks
 
-    if (vmi->hvm && (paddr + length - 1 > vmi->size)) {
-        errprint("--requesting PA [0x%"PRIx64"] beyond memsize [0x%"PRIx64"]\n",
-                paddr + length, vmi->size);
-        errprint("\tpaddr: %"PRIx64", length %"PRIx32", vmi->size %"PRIx64"\n", paddr, length,
-                vmi->size);
+    if (vmi->hvm && (paddr + length > vmi->max_physical_address)) {
+        errprint("--requesting PA [0x%"PRIx64"] beyond max physical address [0x%"PRIx64"]\n",
+                paddr + length, vmi->max_physical_address);
+        errprint("\tpaddr: %"PRIx64", length %"PRIx32", vmi->max_physical_address %"PRIx64"\n", paddr, length,
+                vmi->max_physical_address);
         return 0;
     }
 
@@ -161,10 +143,6 @@ static memory_cache_entry_t create_new_entry (vmi_instance_t vmi, addr_t paddr,
     entry->last_updated = time(NULL);
     entry->last_used = entry->last_updated;
     entry->data = get_memory_data(vmi, paddr, length);
-
-    if (vmi->memory_cache_size >= vmi->memory_cache_size_max) {
-        clean_cache(vmi);
-    }
 
     return entry;
 }
@@ -185,9 +163,8 @@ memory_cache_init(
         g_hash_table_new_full(g_int64_hash, g_int64_equal,
                               g_free,
                               memory_cache_entry_free);
-    vmi->memory_cache_lru = NULL;
+    vmi->memory_cache_lru = g_queue_new();
     vmi->memory_cache_age = age_limit;
-    vmi->memory_cache_size = 0;
     vmi->memory_cache_size_max = MAX_PAGE_CACHE_SIZE;
     get_data_callback = get_data;
     release_data_callback = release_data;
@@ -212,6 +189,10 @@ memory_cache_insert(
         return validate_and_return_data(vmi, entry);
     }
     else {
+        if (g_queue_get_length(vmi->memory_cache_lru) >= vmi->memory_cache_size_max) {
+            clean_cache(vmi);
+        }
+
         dbprint(VMI_DEBUG_MEMCACHE, "--MEMORY cache set 0x%"PRIx64"\n", paddr);
 
         entry = create_new_entry(vmi, paddr, vmi->page_size);
@@ -227,9 +208,7 @@ memory_cache_insert(
         gint64 *key2 = safe_malloc(sizeof(gint64));
 
         *key2 = paddr;
-        vmi->memory_cache_lru =
-            g_list_prepend(vmi->memory_cache_lru, key2);
-        vmi->memory_cache_size++;
+        g_queue_push_head(vmi->memory_cache_lru, key2);
 
         return entry->data;
     }
@@ -239,7 +218,6 @@ void memory_cache_remove(
     vmi_instance_t vmi,
     addr_t paddr)
 {
-    memory_cache_entry_t entry = NULL;
     addr_t paddr_aligned = paddr & ~(((addr_t) vmi->page_size) - 1);
 
     if (paddr != paddr_aligned) {
@@ -259,12 +237,8 @@ memory_cache_destroy(
     vmi->memory_cache_size_max = 0;
 
     if (vmi->memory_cache_lru) {
-#if GLIB_CHECK_VERSION(2, 28, 0)
-        g_list_free_full(vmi->memory_cache_lru, g_free);
-#else
-        g_list_foreach(vmi->memory_cache_lru, g_free, NULL);
-        g_list_free(vmi->memory_cache_lru);
-#endif
+        g_queue_foreach(vmi->memory_cache_lru, (GFunc)g_free, NULL);
+        g_queue_free(vmi->memory_cache_lru);
         vmi->memory_cache_lru = NULL;
     }
 
@@ -274,7 +248,6 @@ memory_cache_destroy(
     }
 
     vmi->memory_cache_age = 0;
-    vmi->memory_cache_size = 0;
     vmi->memory_cache_size_max = 0;
     get_data_callback = NULL;
     release_data_callback = NULL;
@@ -283,13 +256,13 @@ memory_cache_destroy(
 #else
 void
 memory_cache_init(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     void *(*get_data) (vmi_instance_t,
                        addr_t,
                        uint32_t),
     void (*release_data) (void *,
                           size_t),
-    unsigned long age_limit)
+    unsigned long UNUSED(age_limit))
 {
     get_data_callback = get_data;
     release_data_callback = release_data;

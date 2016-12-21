@@ -36,7 +36,7 @@ windows_get_eprocess_name(
     vmi_instance_t vmi,
     addr_t paddr)
 {
-    int name_length = 16;   //TODO verify that this is correct for all versions
+    size_t name_length = 16;   //TODO verify that this is correct for all versions
     windows_instance_t windows = vmi->os_data;
 
     if (windows == NULL) {
@@ -144,7 +144,7 @@ find_pname_offset(
         check = get_check_magic_func(vmi);
     }
 
-    for (block_pa = 4096; block_pa + BLOCK_SIZE <= vmi->size; block_pa += BLOCK_SIZE) {
+    for (block_pa = 4096; block_pa + BLOCK_SIZE < vmi->max_physical_address; block_pa += BLOCK_SIZE) {
         read = vmi_read_pa(vmi, block_pa, block_buffer, BLOCK_SIZE);
         if (BLOCK_SIZE != read) {
             continue;
@@ -209,7 +209,7 @@ find_process_by_name(
         check = get_check_magic_func(vmi);
     }
 
-    for (block_pa = start_address; block_pa + VMI_PS_4KB <= vmi->size;
+    for (block_pa = start_address; block_pa + VMI_PS_4KB < vmi->max_physical_address;
          block_pa += VMI_PS_4KB) {
         read = vmi_read_pa(vmi, block_pa, block_buffer, VMI_PS_4KB);
         if (VMI_PS_4KB != read) {
@@ -250,8 +250,9 @@ windows_find_eprocess(
     }
 
     if (!windows->pname_offset) {
-        if(windows->sysmap) {
-            windows_system_map_symbol_to_address(vmi, "_EPROCESS", "ImageFileName", &windows->pname_offset);
+        if(windows->rekall_profile) {
+            if ( VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "ImageFileName", &windows->pname_offset) )
+                return 0;
         } else {
             windows->pname_offset = find_pname_offset(vmi, check);
         }

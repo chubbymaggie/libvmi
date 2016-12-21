@@ -37,21 +37,21 @@ typedef struct driver_interface {
         vmi_instance_t);
     void (*destroy_ptr) (
         vmi_instance_t);
-    unsigned long (*get_id_from_name_ptr) (
+    uint64_t (*get_id_from_name_ptr) (
         vmi_instance_t,
         const char *);
     status_t (*get_name_from_id_ptr) (
         vmi_instance_t,
-        unsigned long,
+        uint64_t,
         char **);
-    unsigned long (*get_id_ptr) (
+    uint64_t (*get_id_ptr) (
         vmi_instance_t);
     void (*set_id_ptr) (
         vmi_instance_t,
-        unsigned long);
+        uint64_t);
     status_t (*check_id_ptr) (
         vmi_instance_t,
-        unsigned long);
+        uint64_t);
     status_t (*get_name_ptr) (
         vmi_instance_t,
         char **);
@@ -60,7 +60,8 @@ typedef struct driver_interface {
         const char *);
     status_t (*get_memsize_ptr) (
         vmi_instance_t,
-        uint64_t *);
+        uint64_t *,
+        addr_t *);
     status_t (*get_vcpureg_ptr) (
         vmi_instance_t,
         reg_t *,
@@ -110,23 +111,53 @@ typedef struct driver_interface {
         vmi_instance_t);
     status_t (*set_reg_access_ptr)(
         vmi_instance_t,
-        reg_event_t);
+        reg_event_t*);
     status_t (*set_intr_access_ptr)(
         vmi_instance_t,
-        interrupt_event_t,
-        uint8_t enabled);
+        interrupt_event_t*,
+        bool enabled);
     status_t (*set_mem_access_ptr)(
         vmi_instance_t,
-        mem_event_t,
-        vmi_mem_access_t);
+        addr_t gpfn,
+        vmi_mem_access_t,
+        uint16_t vmm_pagetable_id);
     status_t (*start_single_step_ptr)(
         vmi_instance_t,
-        single_step_event_t);
+        single_step_event_t*);
     status_t (*stop_single_step_ptr)(
         vmi_instance_t,
         uint32_t);
     status_t (*shutdown_single_step_ptr)(
         vmi_instance_t);
+    status_t (*set_guest_requested_ptr)(
+        vmi_instance_t,
+        bool enabled);
+    status_t (*set_cpuid_event_ptr)(
+        vmi_instance_t,
+        bool enabled);
+    status_t (*set_debug_event_ptr)(
+        vmi_instance_t,
+        bool enabled);
+    status_t (*slat_get_domain_state_ptr)(
+        vmi_instance_t vmi,
+        bool *state);
+    status_t (*slat_set_domain_state_ptr)(
+        vmi_instance_t vmi,
+        bool state);
+    status_t (*slat_create_ptr)(
+        vmi_instance_t vmi,
+        uint16_t *view);
+    status_t (*slat_destroy_ptr)(
+        vmi_instance_t vmi,
+        uint16_t view);
+    status_t (*slat_switch_ptr)(
+        vmi_instance_t vmi,
+        uint16_t view);
+    status_t (*slat_change_gfn_ptr)(
+        vmi_instance_t vmi,
+        uint16_t slat_idx,
+        addr_t old_gfn,
+        addr_t new_gfn);
 
     /* Driver-specific data storage. */
     void* driver_data;
@@ -138,7 +169,7 @@ typedef struct driver_interface {
 
 status_t driver_init_mode(
     vmi_instance_t vmi,
-    unsigned long id,
+    uint64_t domainid,
     const char *name);
 
 status_t driver_init(

@@ -50,8 +50,7 @@ vmi_event_t kernel_vsyscall_event;
 vmi_event_t kernel_sysenter_target_event;
 
 void print_event(vmi_event_t event){
-    printf("PAGE %"PRIx64" ACCESS: %c%c%c for GFN %"PRIx64" (offset %06"PRIx64") gla %016"PRIx64" (vcpu %"PRIu32")\n",
-        event.mem_event.physical_address,
+    printf("PAGE ACCESS: %c%c%c for GFN %"PRIx64" (offset %06"PRIx64") gla %016"PRIx64" (vcpu %"PRIu32")\n",
         (event.mem_event.out_access & VMI_MEMACCESS_R) ? 'r' : '-',
         (event.mem_event.out_access & VMI_MEMACCESS_W) ? 'w' : '-',
         (event.mem_event.out_access & VMI_MEMACCESS_X) ? 'x' : '-',
@@ -74,7 +73,7 @@ void print_event(vmi_event_t event){
  *    performance reasons.
  */
 
-void msr_syscall_sysenter_cb(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t msr_syscall_sysenter_cb(vmi_instance_t vmi, vmi_event_t *event){
     reg_t rdi, rax;
     vmi_get_vcpureg(vmi, &rax, RAX, event->vcpu_id);
     vmi_get_vcpureg(vmi, &rdi, RDI, event->vcpu_id);
@@ -83,10 +82,11 @@ void msr_syscall_sysenter_cb(vmi_instance_t vmi, vmi_event_t *event){
 
     print_event(*event);
 
-    vmi_clear_event(vmi, &msr_syscall_sysenter_event);
+    vmi_clear_event(vmi, &msr_syscall_sysenter_event, NULL);
+    return 0;
 }
 
-void syscall_compat_cb(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t syscall_compat_cb(vmi_instance_t vmi, vmi_event_t *event){
     reg_t rdi, rax;
     vmi_get_vcpureg(vmi, &rax, RAX, event->vcpu_id);
     vmi_get_vcpureg(vmi, &rdi, RDI, event->vcpu_id);
@@ -95,10 +95,11 @@ void syscall_compat_cb(vmi_instance_t vmi, vmi_event_t *event){
 
     print_event(*event);
 
-    vmi_clear_event(vmi, &msr_syscall_compat_event);
+    vmi_clear_event(vmi, &msr_syscall_compat_event, NULL);
+    return 0;
 }
 
-void vsyscall_cb(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t vsyscall_cb(vmi_instance_t vmi, vmi_event_t *event){
     reg_t rdi, rax;
     vmi_get_vcpureg(vmi, &rax, RAX, event->vcpu_id);
     vmi_get_vcpureg(vmi, &rdi, RDI, event->vcpu_id);
@@ -107,10 +108,11 @@ void vsyscall_cb(vmi_instance_t vmi, vmi_event_t *event){
 
     print_event(*event);
 
-    vmi_clear_event(vmi, &kernel_vsyscall_event);
+    vmi_clear_event(vmi, &kernel_vsyscall_event, NULL);
+    return 0;
 }
 
-void ia32_sysenter_target_cb(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t ia32_sysenter_target_cb(vmi_instance_t vmi, vmi_event_t *event){
     reg_t rdi, rax;
     vmi_get_vcpureg(vmi, &rax, RAX, event->vcpu_id);
     vmi_get_vcpureg(vmi, &rdi, RDI, event->vcpu_id);
@@ -119,10 +121,11 @@ void ia32_sysenter_target_cb(vmi_instance_t vmi, vmi_event_t *event){
 
     print_event(*event);
 
-    vmi_clear_event(vmi, &kernel_sysenter_target_event);
+    vmi_clear_event(vmi, &kernel_sysenter_target_event, NULL);
+    return 0;
 }
 
-void syscall_lm_cb(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t syscall_lm_cb(vmi_instance_t vmi, vmi_event_t *event){
     reg_t rdi, rax;
     vmi_get_vcpureg(vmi, &rax, RAX, event->vcpu_id);
     vmi_get_vcpureg(vmi, &rdi, RDI, event->vcpu_id);
@@ -131,10 +134,11 @@ void syscall_lm_cb(vmi_instance_t vmi, vmi_event_t *event){
 
     print_event(*event);
 
-    vmi_clear_event(vmi, &msr_syscall_lm_event);
+    vmi_clear_event(vmi, &msr_syscall_lm_event, NULL);
+    return 0;
 }
 
-void cr3_one_task_callback(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t cr3_one_task_callback(vmi_instance_t vmi, vmi_event_t *event){
 
     vmi_pid_t pid = vmi_dtb_to_pid(vmi, event->reg_event.value);
 
@@ -158,11 +162,12 @@ void cr3_one_task_callback(vmi_instance_t vmi, vmi_event_t *event){
     }
     else{
         printf("PID %i is executing, not my process!\n", pid);
-        vmi_clear_event(vmi, &msr_syscall_sysenter_event);
+        vmi_clear_event(vmi, &msr_syscall_sysenter_event, NULL);
     }
+    return 0;
 }
 
-void cr3_all_tasks_callback(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t cr3_all_tasks_callback(vmi_instance_t vmi, vmi_event_t *event){
     vmi_pid_t pid = vmi_dtb_to_pid(vmi, event->reg_event.value);
     printf("PID %i with CR3=%"PRIx64" executing on vcpu %"PRIu32". Previous CR3=%"PRIx64"\n",
         pid, event->reg_event.value, event->vcpu_id, event->reg_event.previous);
@@ -172,7 +177,8 @@ void cr3_all_tasks_callback(vmi_instance_t vmi, vmi_event_t *event){
 
     if(vmi_register_event(vmi, &msr_syscall_sysenter_event) == VMI_FAILURE)
         fprintf(stderr, "Could not install sysenter syscall handler.\n");
-    vmi_clear_event(vmi, &msr_syscall_sysenter_event);
+    vmi_clear_event(vmi, &msr_syscall_sysenter_event, NULL);
+    return 0;
 }
 
 static int interrupted = 0;
@@ -287,6 +293,7 @@ int main (int argc, char **argv)
      *  us to follow as various tasks are scheduled and run upon the CPU)
      */
     memset(&cr3_event, 0, sizeof(vmi_event_t));
+    cr3_event.version = VMI_EVENTS_VERSION;
     cr3_event.type = VMI_EVENT_REGISTER;
     cr3_event.reg_event.reg = CR3;
 
@@ -324,22 +331,19 @@ int main (int argc, char **argv)
     // Setup a default event for tracking memory at the syscall handler.
     // But don't install it; that will be done by the cr3 handler.
     memset(&msr_syscall_sysenter_event, 0, sizeof(vmi_event_t));
+    msr_syscall_sysenter_event.version = VMI_EVENTS_VERSION;
     msr_syscall_sysenter_event.type = VMI_EVENT_MEMORY;
-    msr_syscall_sysenter_event.mem_event.physical_address = phys_sysenter_ip;
-    msr_syscall_sysenter_event.mem_event.npages = 1;
-    msr_syscall_sysenter_event.mem_event.granularity=VMI_MEMEVENT_PAGE;
+    msr_syscall_sysenter_event.mem_event.gfn = phys_sysenter_ip >> 12;
 
     memset(&kernel_sysenter_target_event, 0, sizeof(vmi_event_t));
+    kernel_sysenter_target_event.version = VMI_EVENTS_VERSION;
     kernel_sysenter_target_event.type = VMI_EVENT_MEMORY;
-    kernel_sysenter_target_event.mem_event.physical_address = phys_ia32_sysenter_target;
-    kernel_sysenter_target_event.mem_event.npages = 1;
-    kernel_sysenter_target_event.mem_event.granularity=VMI_MEMEVENT_PAGE;
+    kernel_sysenter_target_event.mem_event.gfn = phys_ia32_sysenter_target >> 12;
 
     memset(&kernel_vsyscall_event, 0, sizeof(vmi_event_t));
+    kernel_vsyscall_event.version = VMI_EVENTS_VERSION;
     kernel_vsyscall_event.type = VMI_EVENT_MEMORY;
-    kernel_vsyscall_event.mem_event.physical_address = phys_vsyscall;
-    kernel_vsyscall_event.mem_event.npages = 1;
-    kernel_vsyscall_event.mem_event.granularity=VMI_MEMEVENT_PAGE;
+    kernel_vsyscall_event.mem_event.gfn = phys_vsyscall >> 12;
 
     while(!interrupted){
         printf("Waiting for events...\n");
@@ -351,7 +355,6 @@ int main (int argc, char **argv)
     }
     printf("Finished with test.\n");
 
-leave:
     // cleanup any memory associated with the libvmi instance
     vmi_destroy(vmi);
 

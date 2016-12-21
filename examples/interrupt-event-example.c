@@ -33,15 +33,26 @@
 
 vmi_event_t interrupt_event;
 
-void int3_cb(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t int3_cb(vmi_instance_t vmi, vmi_event_t *event){
     printf("Int 3 happened: GFN=%"PRIx64" RIP=%"PRIx64"\n",
         event->interrupt_event.gfn, event->interrupt_event.gla);
-    
+
     /* This callback assumes that all INT3 events are caused by
      *  a debugger or similar inside the guest, and therefore
-     *  unconditionally reinjects the interrupt. 
+     *  unconditionally reinjects the interrupt.
      */
     event->interrupt_event.reinject = 1;
+
+    /*
+     * By default int3 instructions have length of 1 byte unless
+     * there are prefixes attached. As adding prefixes to int3 have
+     * no effect, under normal circumstances no legitimate compiler/debugger
+     * would add any. However, a malicious guest could add prefixes to change
+     * the instruction length. For this example we simply assume a non-malicious
+     * guest.
+     */
+    event->interrupt_event.insn_length = 1;
+    return 0;
 }
 
 static int interrupted = 0;
@@ -81,6 +92,7 @@ int main (int argc, char **argv) {
 
     /* Register event to track INT3 interrupts */
     memset(&interrupt_event, 0, sizeof(vmi_event_t));
+    interrupt_event.version = VMI_EVENTS_VERSION;
     interrupt_event.type = VMI_EVENT_INTERRUPT;
     interrupt_event.interrupt_event.intr = INT3;
     interrupt_event.callback = int3_cb;
@@ -93,7 +105,6 @@ int main (int argc, char **argv) {
     }
     printf("Finished with test.\n");
 
-leave:
     // cleanup any memory associated with the libvmi instance
     vmi_destroy(vmi);
 

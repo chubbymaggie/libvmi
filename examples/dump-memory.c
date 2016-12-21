@@ -39,6 +39,9 @@ main(
     int argc,
     char **argv)
 {
+    if ( argc != 3 )
+        return 1;
+
     vmi_instance_t vmi;
     char *filename = NULL;
     FILE *f = NULL;
@@ -46,7 +49,6 @@ main(
     unsigned char zeros[PAGE_SIZE];
 
     memset(zeros, 0, PAGE_SIZE);
-    uint32_t offset = 0;
     addr_t address = 0;
     addr_t size = 0;
 
@@ -69,7 +71,7 @@ main(
         goto error_exit;
     }
 
-    size = vmi_get_memsize(vmi);
+    size = vmi_get_max_physical_address(vmi);
 
     while (address < size) {
 

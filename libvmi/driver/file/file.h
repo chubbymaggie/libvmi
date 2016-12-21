@@ -37,7 +37,8 @@ void file_set_name(
     const char *name);
 status_t file_get_memsize(
     vmi_instance_t vmi,
-    uint64_t *size);
+    uint64_t *allocated_ram_size,
+    addr_t *maximum_physical_address);
 status_t file_get_vcpureg(
     vmi_instance_t vmi,
     reg_t *value,
@@ -54,7 +55,7 @@ status_t file_write(
 int file_is_pv(
     vmi_instance_t vmi);
 status_t file_test(
-    unsigned long id,
+    uint64_t id,
     const char *name);
 status_t file_pause_vm(
     vmi_instance_t vmi);

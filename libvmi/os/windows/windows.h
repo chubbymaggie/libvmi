@@ -47,7 +47,7 @@ struct windows_instance {
 
     win_ver_t version; /**< version of Windows */
 
-    char *sysmap;           /**< system map file for domain's running kernel */
+    char *rekall_profile; /**< Rekall profile path for domain's running kernel */
 };
 typedef struct windows_instance *windows_instance_t;
 
@@ -60,19 +60,12 @@ status_t
 windows_kernel_symbol_to_address(vmi_instance_t vmi, const char *symbol,
         addr_t *kernel_base_address, addr_t *address);
 status_t
-windows_export_to_rva(vmi_instance_t vmi, addr_t base_vaddr, vmi_pid_t pid,
+windows_export_to_rva(vmi_instance_t vmi, const access_context_t *ctx,
         const char *symbol, addr_t *rva);
 char*
-windows_rva_to_export(vmi_instance_t vmi, addr_t rva, addr_t base_vaddr,
-        vmi_pid_t pid);
+windows_rva_to_export(vmi_instance_t vmi, addr_t rva, const access_context_t *ctx);
 
 status_t windows_teardown(vmi_instance_t vmi);
-
-status_t windows_system_map_symbol_to_address(
-    vmi_instance_t vmi,
-    const char *symbol,
-    const char *subsymbol,
-    addr_t *address);
 
 typedef int (*check_magic_func)(uint32_t);
 int find_pname_offset(vmi_instance_t vmi, check_magic_func check);
@@ -84,6 +77,6 @@ addr_t windows_find_eprocess_list_pgd(vmi_instance_t vmi, addr_t pgd);
 status_t init_from_kdbg(vmi_instance_t vmi);
 status_t windows_kdbg_lookup(vmi_instance_t vmi, const char *symbol, addr_t *address);
 
-unicode_string_t *windows_read_unicode_struct(vmi_instance_t vmi, addr_t vaddr, vmi_pid_t pid);
+unicode_string_t *windows_read_unicode_struct(vmi_instance_t vmi, const access_context_t *ctx);
 
 #endif /* OS_WINDOWS_H_ */

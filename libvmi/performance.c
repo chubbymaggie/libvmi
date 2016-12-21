@@ -78,12 +78,13 @@ stddev(
         total += sq_data[i];
     }
     mean = total / (double) count;
+    free(sq_data);
 
     return sqrt(mean);
 }
 
 static void
-avg_measurement(
+UNUSED_FUNCTION(avg_measurement)(
     long int *data,
     int loops)
 {

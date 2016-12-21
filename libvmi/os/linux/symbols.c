@@ -65,7 +65,6 @@ get_symbol_row(
             while (curpos < MAX_ROW_LENGTH) {
                 if (isspace(row[curpos])) {
                     row[curpos] = '\0';
-                    break;
                 }
                 ++curpos;
             }
@@ -88,11 +87,10 @@ error_exit:
     return ret;
 }
 
-status_t
+static status_t
 linux_system_map_symbol_to_address(
     vmi_instance_t vmi,
     const char *symbol,
-    addr_t *kernel_base_vaddr,
     addr_t *address)
 {
     FILE *f = NULL;
@@ -126,9 +124,6 @@ linux_system_map_symbol_to_address(
         goto done;
     }
 
-    if (kernel_base_vaddr) {
-        (*kernel_base_vaddr) = 0;
-    }
     (*address) = (addr_t) strtoull(row, NULL, 16);
 
     ret = VMI_SUCCESS;
@@ -138,5 +133,113 @@ done:
         free(row);
     if (f)
         fclose(f);
+    return ret;
+}
+
+char* linux_system_map_address_to_symbol(
+    vmi_instance_t vmi,
+    addr_t address,
+    const access_context_t *ctx)
+{
+    FILE *f = NULL;
+    char *row = NULL;
+    char* address_str = NULL;
+    char* it = NULL;
+    char* symbol = NULL;
+    int size = 0;
+    linux_instance_t linux_instance = vmi->os_data;
+
+    switch(ctx->translate_mechanism) {
+        case VMI_TM_PROCESS_PID:
+            if(ctx->pid != 0)
+                goto err;
+            break;
+        case VMI_TM_PROCESS_DTB:
+            if(ctx->dtb != vmi->kpgd)
+                goto err;
+            break;
+        default:
+            goto err;
+    };
+
+    if (linux_instance == NULL) {
+        errprint("VMI_ERROR: OS instance not initialized\n");
+        goto done;
+    }
+
+    if ((NULL == linux_instance->sysmap) || (strlen(linux_instance->sysmap) == 0)) {
+        errprint("VMI_WARNING: No linux sysmap configured\n");
+        goto done;
+    }
+
+    row = safe_malloc(MAX_ROW_LENGTH);
+    if ((f = fopen(linux_instance->sysmap, "r")) == NULL) {
+        fprintf(stderr,
+                "ERROR: could not find System.map file after checking:\n");
+        fprintf(stderr, "\t%s\n", linux_instance->sysmap);
+        fprintf(stderr,
+                "To fix this problem, add the correct sysmap entry to /etc/libvmi.conf\n");
+        address = 0;
+        goto done;
+    }
+    size = snprintf(NULL,0,"%"PRIx64"", address) + 1;
+    address_str = g_malloc0(size);
+    snprintf(address_str, size, "%"PRIx64"", address);
+    if (get_symbol_row(f, row, address_str, 0) == VMI_FAILURE) {
+        goto done;
+    }
+
+    // skip two columns
+    for(it=row; *it!=0; it++);
+    for(it++; *it!=0; it++);
+    it++;
+
+    symbol = strdup(it);
+
+done:
+    if (row)
+        free(row);
+    if (f)
+        fclose(f);
+    if (address_str)
+        free(address_str);
+    return symbol;
+
+err:
+    errprint("VMI_WARNING: Lookup is implemented for kernel symbols only\n");
+    return NULL;
+}
+
+status_t
+linux_symbol_to_address(
+    vmi_instance_t vmi,
+    const char *symbol,
+    addr_t* UNUSED(__unused),
+    addr_t* address)
+{
+    status_t ret = VMI_FAILURE;
+    linux_instance_t linux_instance = vmi->os_data;
+
+    if (linux_instance == NULL) {
+        errprint("VMI_ERROR: OS instance not initialized\n");
+        goto done;
+    }
+
+    if (!linux_instance->sysmap && !linux_instance->rekall_profile) {
+        errprint("VMI_WARNING: No linux sysmap and Rekall profile configured\n");
+        goto done;
+    }
+
+    if (linux_instance->sysmap)
+        ret = linux_system_map_symbol_to_address(vmi, symbol, address);
+    else
+        ret = rekall_profile_symbol_to_rva(
+                linux_instance->rekall_profile,
+                symbol, NULL, address);
+
+    if ( VMI_SUCCESS == ret )
+        *address += linux_instance->kaslr_offset;
+
+done:
     return ret;
 }

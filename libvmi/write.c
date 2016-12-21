@@ -32,14 +32,13 @@
 size_t
 vmi_write(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     void *buf,
     size_t count)
 {
     addr_t start_addr = 0;
     addr_t dtb = 0;
     addr_t paddr = 0;
-    addr_t pfn = 0;
     addr_t offset = 0;
     size_t buf_offset = 0;
 
@@ -60,9 +59,9 @@ vmi_write(
             start_addr = ctx->addr;
             break;
         case VMI_TM_KERNEL_SYMBOL:
-            if (!vmi->arch_interface || !vmi->os_interface) {
+            if (!vmi->arch_interface || !vmi->os_interface || !vmi->kpgd)
               return 0;
-            }
+
             dtb = vmi->kpgd;
             start_addr = vmi_translate_ksym2v(vmi, ctx->ksym);
             break;
@@ -74,6 +73,9 @@ vmi_write(
                 dtb = vmi_pid_to_dtb(vmi, ctx->pid);
             } else {
                 dtb = vmi->kpgd;
+            }
+            if (!dtb) {
+                return 0;
             }
             start_addr = ctx->addr;
             break;
@@ -93,13 +95,11 @@ vmi_write(
         size_t write_len = 0;
 
         if(dtb) {
-            paddr = vmi_pagetable_lookup(vmi, dtb, start_addr + buf_offset);
+            if (VMI_SUCCESS != vmi_pagetable_lookup_cache(vmi, dtb, start_addr + buf_offset, &paddr)) {
+                return buf_offset;
+            }
         } else {
             paddr = start_addr + buf_offset;
-        }
-
-        if (!paddr) {
-            return buf_offset;
         }
 
         /* determine how much we can write to this page */
@@ -180,9 +180,9 @@ vmi_write_ksym(
 static inline
 status_t vmi_write_X(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_write = vmi_write(vmi, ctx, value, size);
 
@@ -197,7 +197,7 @@ status_t vmi_write_X(
 status_t
 vmi_write_8(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint8_t * value)
 {
     return vmi_write_X(vmi, ctx, value, 1);
@@ -206,7 +206,7 @@ vmi_write_8(
 status_t
 vmi_write_16(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint16_t * value)
 {
     return vmi_write_X(vmi, ctx, value, 2);
@@ -215,7 +215,7 @@ vmi_write_16(
 status_t
 vmi_write_32(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint32_t * value)
 {
     return vmi_write_X(vmi, ctx, value, 4);
@@ -224,7 +224,7 @@ vmi_write_32(
 status_t
 vmi_write_64(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint64_t * value)
 {
     return vmi_write_X(vmi, ctx, value, 8);
@@ -233,10 +233,11 @@ vmi_write_64(
 status_t
 vmi_write_addr(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     addr_t * value)
 {
     switch(vmi->page_mode) {
+        case VMI_PM_AARCH64:// intentional fall-through
         case VMI_PM_IA32E:
             return vmi_write_X(vmi, ctx, value, 8);
         case VMI_PM_AARCH32:// intentional fall-through
@@ -260,7 +261,7 @@ vmi_write_X_pa(
     vmi_instance_t vmi,
     addr_t paddr,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_write = vmi_write_pa(vmi, paddr, value, size);
 
@@ -330,7 +331,7 @@ vmi_write_X_va(
     addr_t vaddr,
     vmi_pid_t pid,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_write = vmi_write_va(vmi, vaddr, pid, value, size);
 
@@ -404,7 +405,7 @@ vmi_write_X_ksym(
     vmi_instance_t vmi,
     char *sym,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_write = vmi_write_ksym(vmi, sym, value, size);
 

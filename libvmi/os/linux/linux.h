@@ -23,7 +23,9 @@
 #include "private.h"
 
 struct linux_instance {
-    char *sysmap;           /**< system map file for domain's running kernel */
+    char *sysmap; /**< system map file for domain's running kernel */
+
+    char *rekall_profile; /**< Rekall profile for domain's running kernel */
 
     addr_t tasks_offset; /**< task_struct->tasks */
 
@@ -34,6 +36,8 @@ struct linux_instance {
     addr_t pgd_offset; /**< mm_struct->pgd */
 
     addr_t name_offset; /**< task_struct->comm */
+
+    addr_t kaslr_offset; /**< offset generated at boot time for KASLR */
 };
 typedef struct linux_instance *linux_instance_t;
 
@@ -41,8 +45,11 @@ status_t linux_init(vmi_instance_t instance);
 
 uint64_t linux_get_offset(vmi_instance_t vmi, const char* offset_name);
 
-status_t linux_system_map_symbol_to_address(vmi_instance_t instance,
-        const char *symbol, addr_t *kernel_base_vaddr, addr_t *address);
+status_t linux_symbol_to_address(vmi_instance_t instance,
+        const char *symbol, addr_t *__unused, addr_t *address);
+
+char* linux_system_map_address_to_symbol(vmi_instance_t vmi,
+        addr_t address, const access_context_t *ctx);
 
 addr_t linux_pid_to_pgd(vmi_instance_t vmi, vmi_pid_t pid);
 

@@ -46,8 +46,7 @@ static void close_handler(int sig){
 }
 
 void print_event(vmi_event_t *event){
-    printf("\tPAGE %"PRIx64" ACCESS: %c%c%c for GFN %"PRIx64" (offset %06"PRIx64") gla %016"PRIx64" (vcpu %u)\n",
-        event->mem_event.physical_address,
+    printf("\tPAGE ACCESS: %c%c%c for GFN %"PRIx64" (offset %06"PRIx64") gla %016"PRIx64" (vcpu %u)\n",
         (event->mem_event.out_access & VMI_MEMACCESS_R) ? 'r' : '-',
         (event->mem_event.out_access & VMI_MEMACCESS_W) ? 'w' : '-',
         (event->mem_event.out_access & VMI_MEMACCESS_X) ? 'x' : '-',
@@ -58,12 +57,13 @@ void print_event(vmi_event_t *event){
     );
 }
 
-void step_callback(vmi_instance_t vmi, vmi_event_t *event) {
+event_response_t step_callback(vmi_instance_t vmi, vmi_event_t *event) {
     printf("Re-registering event\n");
     vmi_register_event(vmi, event);
+    return 0;
 }
 
-void mm_callback(vmi_instance_t vmi, vmi_event_t *event) {
+event_response_t mm_callback(vmi_instance_t vmi, vmi_event_t *event) {
 
     vmi_get_vcpureg(vmi, &cr3, CR3, 0);
     vmi_pid_t current_pid = vmi_dtb_to_pid(vmi, cr3);
@@ -77,11 +77,11 @@ void mm_callback(vmi_instance_t vmi, vmi_event_t *event) {
 
     if( current_pid == pid && event->mem_event.gla == rip) {
         printf("\tCought the original RIP executing again!");
-        vmi_clear_event(vmi, event);
+        vmi_clear_event(vmi, event, NULL);
         interrupted = 1;
     } else {
         printf("\tEvent on same page, but not the same RIP");
-        vmi_clear_event(vmi, event);
+        vmi_clear_event(vmi, event, NULL);
 
         /* These two calls are equivalent */
         //vmi_step_event(vmi, event, event->vcpu_id, 1, NULL);
@@ -89,9 +89,10 @@ void mm_callback(vmi_instance_t vmi, vmi_event_t *event) {
     }
 
     printf("\n}\n");
+    return 0;
 }
 
-void cr3_callback(vmi_instance_t vmi, vmi_event_t *event){
+event_response_t cr3_callback(vmi_instance_t vmi, vmi_event_t *event){
     vmi_pid_t current_pid = vmi_dtb_to_pid(vmi, event->reg_event.value);
     printf("PID %i with CR3=%"PRIx64" executing on vcpu %u.\n", current_pid, event->reg_event.value, event->vcpu_id);
 
@@ -105,9 +106,10 @@ void cr3_callback(vmi_instance_t vmi, vmi_event_t *event){
         if(mm_enabled) {
             mm_enabled = 0;
             printf(" -- Disabling mem-event\n");
-            vmi_clear_event(vmi, &mm_event);
+            vmi_clear_event(vmi, &mm_event, NULL);
         }
     }
+    return 0;
 }
 
 int main (int argc, char **argv)
@@ -173,7 +175,7 @@ int main (int argc, char **argv)
 
     printf("Preparing memory event to catch next RIP 0x%lx, PA 0x%lx, page 0x%lx for PID %u\n",
             rip, rip_pa, rip_pa >> 12, pid);
-    SETUP_MEM_EVENT(&mm_event, rip_pa, VMI_MEMEVENT_PAGE, VMI_MEMACCESS_X, mm_callback);
+    SETUP_MEM_EVENT(&mm_event, rip_pa, VMI_MEMACCESS_X, mm_callback, 0);
 
     vmi_resume_vm(vmi);
 
@@ -186,7 +188,6 @@ int main (int argc, char **argv)
     }
     printf("Finished with test.\n");
 
-leave:
     // cleanup any memory associated with the libvmi instance
     vmi_destroy(vmi);
 

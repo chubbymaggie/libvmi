@@ -264,13 +264,18 @@ START_TEST (test_peparse)
     vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, get_testvm());
     addr_t kernbase;
 
-    if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)){
+    if (VMI_OS_WINDOWS == vmi_get_ostype(vmi) && VMI_OS_WINDOWS_XP == vmi_get_winver(vmi)){
 
         kernbase = vmi_translate_ksym2v(vmi, "KernBase");
 
         uint8_t pe[MAX_HEADER_SIZE];
+        access_context_t ctx = {
+            .translate_mechanism = VMI_TM_PROCESS_PID,
+            .addr = kernbase,
+            .pid = 0
+        };
 
-        if(VMI_SUCCESS == peparse_get_image_virt(vmi, kernbase, 0, MAX_HEADER_SIZE, pe)) {
+        if(VMI_SUCCESS == peparse_get_image(vmi, &ctx, MAX_HEADER_SIZE, pe)) {
             if(VMI_SUCCESS == is_WINDOWS_KERNEL(vmi, kernbase, pe)) {
 
                 if(VMI_FAILURE == check_os_version(vmi, kernbase, pe))

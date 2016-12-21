@@ -45,7 +45,7 @@ driver_destroy(
     bzero(&vmi->driver, sizeof(driver_interface_t));
 }
 
-static inline unsigned long
+static inline uint64_t
 driver_get_id_from_name(
     vmi_instance_t vmi,
     const char *name)
@@ -63,7 +63,7 @@ driver_get_id_from_name(
 static inline status_t
 driver_get_name_from_id(
     vmi_instance_t vmi,
-    unsigned long domid,
+    uint64_t domid,
     char **name)
 {
     if (vmi->driver.initialized && vmi->driver.get_name_from_id_ptr) {
@@ -76,7 +76,7 @@ driver_get_name_from_id(
     }
 }
 
-static inline unsigned long
+static inline uint64_t
 driver_get_id(
     vmi_instance_t vmi)
 {
@@ -92,7 +92,7 @@ driver_get_id(
 static inline void
 driver_set_id(
     vmi_instance_t vmi,
-    unsigned long id)
+    uint64_t id)
 {
     if (vmi->driver.initialized && vmi->driver.set_id_ptr) {
         return vmi->driver.set_id_ptr(vmi, id);
@@ -106,7 +106,7 @@ driver_set_id(
 static inline status_t
 driver_check_id(
     vmi_instance_t vmi,
-    unsigned long id)
+    uint64_t id)
 {
     if (vmi->driver.initialized && vmi->driver.check_id_ptr) {
         return vmi->driver.check_id_ptr(vmi, id);
@@ -148,10 +148,11 @@ driver_set_name(
 static inline status_t
 driver_get_memsize(
     vmi_instance_t vmi,
-    uint64_t *size)
+    uint64_t *allocated_ram_size,
+    addr_t *max_physical_address)
 {
     if (vmi->driver.initialized && vmi->driver.get_memsize_ptr) {
-        return vmi->driver.get_memsize_ptr(vmi, size);
+        return vmi->driver.get_memsize_ptr(vmi, allocated_ram_size, max_physical_address);
     }
     else {
         dbprint
@@ -370,7 +371,7 @@ driver_are_events_pending(
 static inline status_t
 driver_set_reg_access(
     vmi_instance_t vmi,
-    reg_event_t event)
+    reg_event_t *event)
 {
     if (vmi->driver.initialized && vmi->driver.set_reg_access_ptr){
         return vmi->driver.set_reg_access_ptr(vmi, event);
@@ -384,7 +385,7 @@ driver_set_reg_access(
 static inline status_t
 driver_set_intr_access(
     vmi_instance_t vmi,
-    interrupt_event_t event,
+    interrupt_event_t *event,
     uint8_t enabled)
 {
     if (vmi->driver.initialized && vmi->driver.set_intr_access_ptr){
@@ -399,11 +400,12 @@ driver_set_intr_access(
 static inline status_t
 driver_set_mem_access(
     vmi_instance_t vmi,
-    mem_event_t event,
-    vmi_mem_access_t page_access_flag)
+    addr_t gpfn,
+    vmi_mem_access_t page_access_flag,
+    uint16_t vmm_pagetable_id)
 {
     if (vmi->driver.initialized && vmi->driver.set_mem_access_ptr){
-        return vmi->driver.set_mem_access_ptr(vmi, event, page_access_flag);
+        return vmi->driver.set_mem_access_ptr(vmi, gpfn, page_access_flag, vmm_pagetable_id);
     }
     else{
         dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_set_mem_access function not implemented.\n");
@@ -414,9 +416,9 @@ driver_set_mem_access(
 static inline status_t
 driver_start_single_step(
     vmi_instance_t vmi,
-    single_step_event_t event)
+    single_step_event_t *event)
 {
-    if (vmi->driver.initialized && vmi->driver.start_single_step_ptr){
+    if (vmi->driver.initialized && vmi->driver.start_single_step_ptr) {
         return vmi->driver.start_single_step_ptr(vmi, event);
     }
     else{
@@ -448,6 +450,134 @@ driver_shutdown_single_step(
     }
     else{
         dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_shutdown_single_step function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_set_guest_requested_event(
+    vmi_instance_t vmi,
+    bool enabled)
+{
+    if (vmi->driver.initialized && vmi->driver.set_guest_requested_ptr)
+        return vmi->driver.set_guest_requested_ptr(vmi, enabled);
+    else
+    {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_set_guest_requested function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_set_cpuid_event(
+    vmi_instance_t vmi,
+    bool enabled)
+{
+    if (vmi->driver.initialized && vmi->driver.set_cpuid_event_ptr)
+        return vmi->driver.set_cpuid_event_ptr(vmi, enabled);
+    else
+    {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_set_cpuid_event function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_set_debug_event(
+    vmi_instance_t vmi,
+    bool enabled)
+{
+    if (vmi->driver.initialized && vmi->driver.set_debug_event_ptr)
+        return vmi->driver.set_debug_event_ptr(vmi, enabled);
+    else
+    {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_set_debug_event function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_slat_get_domain_state (
+    vmi_instance_t vmi ,
+    bool *state )
+{
+    if (vmi->driver.initialized && vmi->driver.slat_get_domain_state_ptr ) {
+        return vmi->driver.slat_get_domain_state_ptr (vmi, state);
+    }
+    else {
+        dbprint (VMI_DEBUG_DRIVER, "WARNING: driver_slat_get_domain_state function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_slat_set_domain_state (
+    vmi_instance_t vmi ,
+    bool state )
+{
+    if (vmi->driver.initialized && vmi->driver.slat_set_domain_state_ptr ) {
+        return vmi->driver.slat_set_domain_state_ptr (vmi, state);
+    }
+    else {
+        dbprint (VMI_DEBUG_DRIVER, "WARNING: driver_slat_set_domain_state function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_slat_create (
+    vmi_instance_t vmi ,
+    uint16_t *slat_idx )
+{
+    if (vmi->driver.initialized && vmi->driver.slat_create_ptr) {
+        return vmi->driver.slat_create_ptr (vmi, slat_idx);
+    }
+    else {
+        dbprint (VMI_DEBUG_DRIVER, "WARNING: driver_slat_create function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_slat_destroy (
+    vmi_instance_t vmi ,
+    uint16_t slat_idx )
+{
+    if (vmi->driver.initialized && vmi->driver.slat_destroy_ptr) {
+        return vmi->driver.slat_destroy_ptr (vmi, slat_idx);
+    }
+    else {
+        dbprint (VMI_DEBUG_DRIVER, "WARNING: driver_slat_destroy function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_slat_switch (
+    vmi_instance_t vmi ,
+    uint16_t slat_idx )
+{
+    if (vmi->driver.initialized && vmi->driver.slat_switch_ptr) {
+        return vmi->driver.slat_switch_ptr (vmi, slat_idx);
+    }
+    else {
+        dbprint (VMI_DEBUG_DRIVER, "WARNING: driver_slat_switch function not implemented.\n");
+        return VMI_FAILURE;
+    }
+}
+
+static inline status_t
+driver_slat_change_gfn (
+    vmi_instance_t vmi ,
+    uint16_t slat_idx,
+    addr_t old_gfn,
+    addr_t new_gfn)
+{
+    if (vmi->driver.initialized && vmi->driver.slat_change_gfn_ptr) {
+        return vmi->driver.slat_change_gfn_ptr (vmi, slat_idx, old_gfn, new_gfn);
+    }
+    else {
+        dbprint (VMI_DEBUG_DRIVER, "WARNING: driver_slat_change_gfn function not implemented.\n");
         return VMI_FAILURE;
     }
 }

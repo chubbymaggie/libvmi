@@ -10,7 +10,7 @@
  *
  * Author: Nasser Salim (njsalim@sandia.gov)
  * Author: Steven Maresca (steve@zentific.com)
- * Author: Tamas K Lengyel (tamas.lengyel@zentific.com)
+ * Author: Tamas K Lengyel (tamas@tklengyel.com)
  *
  * LibVMI is free software: you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the
@@ -59,112 +59,158 @@
 #include <sys/poll.h>
 #include <unistd.h>
 #include <xenctrl.h>
-#include <xen/mem_event.h>
+#include <libvmi/events.h>
 
-#if XEN_EVENTS_VERSION < 450
-#include <xen/hvm/save.h>
-#else
-#include <xen/memory.h>
-#endif
-
-typedef int spinlock_t;
-#ifdef XENCTRL_HAS_XC_INTERFACE
-typedef xc_evtchn* xc_evtchn_t;
-#else
-typedef int xc_evtchn_t;
-#endif
+#include "xen_events_abi.h"
 
 typedef struct {
-    xc_evtchn_t xce_handle;
+    xc_evtchn* xce_handle;
     int port;
-    mem_event_back_ring_t back_ring;
-#if XEN_EVENTS_VERSION < 420
-    mem_event_shared_page_t *shared_page;
-#else
     uint32_t evtchn_port;
-#endif
     void *ring_page;
-    spinlock_t ring_lock;
+    union {
+        mem_event_42_back_ring_t back_ring_42;
+        mem_event_45_back_ring_t back_ring_45;
+    };
     unsigned long long max_pages;
 } xen_mem_event_t;
 
-// Compatibility wrapper around mem_access versions
-#if XEN_EVENTS_VERSION < 450
-// Xen 4.0-4.4 type flags
-typedef enum {
-    MEMACCESS_INVALID = ~0,
-    MEMACCESS_N = HVMMEM_access_n,
-    MEMACCESS_R = HVMMEM_access_r,
-    MEMACCESS_W = HVMMEM_access_w,
-    MEMACCESS_RW = HVMMEM_access_rw,
-    MEMACCESS_X = HVMMEM_access_x,
-    MEMACCESS_RX = HVMMEM_access_rx,
-    MEMACCESS_WX = HVMMEM_access_wx,
-    MEMACCESS_RWX = HVMMEM_access_rwx,
-    /*
-     * Page starts off as r-x, but automatically
-     * change to r-w on a write
-     */
-    MEMACCESS_RX2RW = HVMMEM_access_rx2rw,
+typedef struct {
+    xc_evtchn* xce_handle;
+    int port;
+    uint32_t evtchn_port;
+    void *ring_page;
+    union {
+        vm_event_46_back_ring_t back_ring_46;
+        vm_event_48_back_ring_t back_ring_48;
+    };
+    xen_pfn_t max_gpfn;
+    uint32_t monitor_capabilities;
+    bool monitor_singlestep_on;
+    bool monitor_mem_access_on;
+    bool monitor_intr_on;
+    bool monitor_cr0_on;
+    bool monitor_cr3_on;
+    bool monitor_cr4_on;
+    bool monitor_xcr0_on;
+    bool monitor_msr_on;
+} xen_vm_event_t;
 
-#ifdef HVMMEM_access_n2rwx
-    /*
-     * Log access: starts off as n, automatically
-     * goes to rwx, generating an event without
-     * pausing the vcpu
-     */
-    MEMACCESS_N2RWX = HVMMEM_access_n2rwx
-#else
-    MEMACCESS_N2RWX = MEMACCESS_INVALID
-#endif
-} compat_memaccess_t;
-typedef hvmmem_access_t mem_access_t;
-
-#else /* XEN_EVENTS_VERSION */
-// Xen 4.5+ type flags
-typedef enum {
-    MEMACCESS_INVALID = ~0,
-    MEMACCESS_N = XENMEM_access_n,
-    MEMACCESS_R = XENMEM_access_r,
-    MEMACCESS_W = XENMEM_access_w,
-    MEMACCESS_RW = XENMEM_access_rw,
-    MEMACCESS_X = XENMEM_access_x,
-    MEMACCESS_RX = XENMEM_access_rx,
-    MEMACCESS_WX = XENMEM_access_wx,
-    MEMACCESS_RWX = XENMEM_access_rwx,
-    /*
-     * Page starts off as r-x, but automatically
-     * change to r-w on a write
-     */
-    MEMACCESS_RX2RW = XENMEM_access_rx2rw,
-    /*
-     * Log access: starts off as n, automatically
-     * goes to rwx, generating an event without
-     * pausing the vcpu
-     */
-    MEMACCESS_N2RWX = XENMEM_access_n2rwx
-} compat_memaccess_t;
-typedef xenmem_access_t mem_access_t;
-
-#endif /* XEN_EVENTS_VERSION */
-
-/* Conversion matrix from LibVMI flags to Xen flags */
-static const unsigned int memaccess_conversion[] = {
-    [VMI_MEMACCESS_INVALID] = MEMACCESS_INVALID,
-    [VMI_MEMACCESS_N] = MEMACCESS_RWX,
-    [VMI_MEMACCESS_R] = MEMACCESS_WX,
-    [VMI_MEMACCESS_W] = MEMACCESS_RX,
-    [VMI_MEMACCESS_X] = MEMACCESS_RW,
-    [VMI_MEMACCESS_RW] = MEMACCESS_X,
-    [VMI_MEMACCESS_RX] = MEMACCESS_W,
-    [VMI_MEMACCESS_WX] = MEMACCESS_R,
-    [VMI_MEMACCESS_RWX] = MEMACCESS_N,
-    [VMI_MEMACCESS_W2X] = MEMACCESS_RX2RW,
-    [VMI_MEMACCESS_RWX2N] = MEMACCESS_N2RWX
+/* Conversion matrix from LibVMI flags to Xen vm_event flags */
+static const unsigned int event_response_conversion[] = {
+    [VMI_EVENT_RESPONSE_EMULATE] = VM_EVENT_FLAG_EMULATE,
+    [VMI_EVENT_RESPONSE_EMULATE_NOWRITE] = VM_EVENT_FLAG_EMULATE_NOWRITE,
+    [VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP] = VM_EVENT_FLAG_TOGGLE_SINGLESTEP,
+    [VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA] = VM_EVENT_FLAG_SET_EMUL_READ_DATA,
+    [VMI_EVENT_RESPONSE_DENY] = VM_EVENT_FLAG_DENY,
+    [VMI_EVENT_RESPONSE_VMM_PAGETABLE_ID] = VM_EVENT_FLAG_ALTERNATE_P2M,
+    [VMI_EVENT_RESPONSE_SET_REGISTERS] = VM_EVENT_FLAG_SET_REGISTERS,
+    [VMI_EVENT_RESPONSE_SET_EMUL_INSN] = VM_EVENT_FLAG_SET_EMUL_INSN_DATA,
 };
 
 typedef struct xen_events {
-    xen_mem_event_t mem_event;
+    union {
+        xen_mem_event_t mem_event;
+        xen_vm_event_t vm_event;
+    };
 } xen_events_t;
+
+static inline status_t
+vmi_flags_sanity_check(vmi_mem_access_t page_access_flag)
+{
+    /*
+     * Setting a page write-only or write-execute in EPT triggers and EPT misconfiguration error
+     * which is unhandled by Xen (at least up to 4.3) and instantly crashes the domain on the first trigger.
+     *
+     * See Intel® 64 and IA-32 Architectures Software Developer’s Manual
+     * 28.2.3.1 EPT Misconfigurations
+     * AN EPT misconfiguration occurs if any of the following is identified while translating a guest-physical address:
+     * * The value of bits 2:0 of an EPT paging-structure entry is either 010b (write-only) or 110b (write/execute).
+     */
+    if(page_access_flag == VMI_MEMACCESS_R || page_access_flag == VMI_MEMACCESS_RX) {
+        errprint("%s error: can't set requested memory access, unsupported by EPT.\n", __FUNCTION__);
+        return VMI_FAILURE;
+    }
+
+    return VMI_SUCCESS;
+}
+
+static inline status_t
+convert_vmi_flags_to_hvmmem(vmi_mem_access_t page_access_flag, hvmmem_access_t *access)
+{
+    if ( VMI_FAILURE == vmi_flags_sanity_check(page_access_flag) )
+        return VMI_FAILURE;
+
+    switch ( page_access_flag ) {
+        case VMI_MEMACCESS_N:
+            *access = HVMMEM_access_rwx;
+            break;
+        case VMI_MEMACCESS_W:
+            *access = HVMMEM_access_rx;
+            break;
+        case VMI_MEMACCESS_X:
+            *access = HVMMEM_access_rw;
+            break;
+        case VMI_MEMACCESS_RW:
+            *access = HVMMEM_access_x;
+            break;
+        case VMI_MEMACCESS_WX:
+            *access = HVMMEM_access_r;
+            break;
+        case VMI_MEMACCESS_RWX:
+            *access = HVMMEM_access_n;
+            break;
+        case VMI_MEMACCESS_W2X:
+            *access = HVMMEM_access_rx2rw;
+            break;
+        case VMI_MEMACCESS_RWX2N:
+            *access = HVMMEM_access_n2rwx;
+            break;
+        default:
+            errprint("%s error: invalid memaccess setting requested\n", __FUNCTION__);
+            return VMI_FAILURE;
+    };
+
+    return VMI_SUCCESS;
+}
+
+static inline status_t
+convert_vmi_flags_to_xenmem(vmi_mem_access_t page_access_flag, xenmem_access_t *access)
+{
+    if ( VMI_FAILURE == vmi_flags_sanity_check(page_access_flag) )
+        return VMI_FAILURE;
+
+    switch ( page_access_flag ) {
+        case VMI_MEMACCESS_N:
+            *access = XENMEM_access_rwx;
+            break;
+        case VMI_MEMACCESS_W:
+            *access = XENMEM_access_rx;
+            break;
+        case VMI_MEMACCESS_X:
+            *access = XENMEM_access_rw;
+            break;
+        case VMI_MEMACCESS_RW:
+            *access = XENMEM_access_x;
+            break;
+        case VMI_MEMACCESS_WX:
+            *access = XENMEM_access_r;
+            break;
+        case VMI_MEMACCESS_RWX:
+            *access = XENMEM_access_n;
+            break;
+        case VMI_MEMACCESS_W2X:
+            *access = XENMEM_access_rx2rw;
+            break;
+        case VMI_MEMACCESS_RWX2N:
+            *access = XENMEM_access_n2rwx;
+            break;
+        default:
+            errprint("%s error: invalid memaccess setting requested\n", __FUNCTION__);
+            return VMI_FAILURE;
+    };
+
+    return VMI_SUCCESS;
+}
 
 #endif

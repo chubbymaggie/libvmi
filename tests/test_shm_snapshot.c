@@ -1,5 +1,5 @@
-/* The LibVMI Library is an introspection library that simplifies access to 
- * memory in a target virtual machine or in a file containing a dump of 
+/* The LibVMI Library is an introspection library that simplifies access to
+ * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
  *
  * Copyright 2012 VMITools Project
@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <inttypes.h>
 #include <pwd.h>
+#include <config.h>
 #include "../libvmi/libvmi.h"
 #include "check_tests.h"
 
@@ -37,7 +38,7 @@
 START_TEST (test_libvmi_shm_snapshot_create)
 {
     vmi_instance_t vmi = NULL;
-    status_t ret = vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, get_testvm());
+    status_t ret = vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE | VMI_INIT_SHM_SNAPSHOT, get_testvm());
 
     ret = vmi_shm_snapshot_create(vmi);
     vmi_shm_snapshot_destroy(vmi);
@@ -55,17 +56,22 @@ END_TEST
 START_TEST (test_vmi_get_dgpma)
 {
     vmi_instance_t vmi = NULL;
-    vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, get_testvm());
+    vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE | VMI_INIT_SHM_SNAPSHOT, get_testvm());
     vmi_shm_snapshot_create(vmi);
 
     addr_t pa = 0x1000; // just because vmi_read_page() deny to fetch frame 0.
     size_t count = 4096;
-    unsigned long max_size = vmi_get_memsize(vmi);
+    unsigned long max_size = vmi_get_max_physical_address(vmi);
     void *buf_readpa = malloc(count);
     void *buf_dgpma = NULL;
     for (; pa + count <= max_size; pa += count) {
         size_t read_pa = vmi_read_pa(vmi, pa, buf_readpa, count);
         size_t read_dgpma = vmi_get_dgpma(vmi, pa, &buf_dgpma, count);
+
+        if (read_pa == 0 && read_dgpma == 0) {
+            continue;
+        }
+
         fail_unless(read_pa == read_dgpma, "vmi_get_dgpma(0x%"PRIx64
             ") read size %d dosn't conform to %d of vmi_read_pa()",
             pa, read_dgpma, read_pa);

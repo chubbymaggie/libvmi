@@ -36,7 +36,7 @@
 size_t
 vmi_read(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     void *buf,
     size_t count)
 {
@@ -63,9 +63,9 @@ vmi_read(
             start_addr = ctx->addr;
             break;
         case VMI_TM_KERNEL_SYMBOL:
-            if (!vmi->arch_interface || !vmi->os_interface) {
+            if (!vmi->arch_interface || !vmi->os_interface || !vmi->kpgd)
               return 0;
-            }
+
             dtb = vmi->kpgd;
             start_addr = vmi_translate_ksym2v(vmi, ctx->ksym);
             break;
@@ -77,6 +77,9 @@ vmi_read(
                 dtb = vmi_pid_to_dtb(vmi, ctx->pid);
             } else {
                 dtb = vmi->kpgd;
+            }
+            if (!dtb) {
+                return 0;
             }
             start_addr = ctx->addr;
             break;
@@ -92,18 +95,18 @@ vmi_read(
             return 0;
     }
 
+
     while (count > 0) {
         size_t read_len = 0;
 
         if(dtb) {
-            paddr = vmi_pagetable_lookup(vmi, dtb, start_addr + buf_offset);
+            if (VMI_SUCCESS != vmi_pagetable_lookup_cache(vmi, dtb, start_addr + buf_offset, &paddr)) {
+                return buf_offset;
+            }
         } else {
             paddr = start_addr + buf_offset;
         }
 
-        if (!paddr) {
-            return buf_offset;
-        }
 
         /* access the memory */
         pfn = paddr >> vmi->page_shift;
@@ -185,9 +188,9 @@ vmi_read_ksym(
 static inline status_t
 vmi_read_X(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_read = vmi_read(vmi, ctx, value, size);
 
@@ -200,7 +203,7 @@ vmi_read_X(
 
 status_t
 vmi_read_8(vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint8_t * value)
 {
     return vmi_read_X(vmi, ctx, value, 1);
@@ -208,7 +211,7 @@ vmi_read_8(vmi_instance_t vmi,
 
 status_t
 vmi_read_16(vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint16_t * value)
 {
     return vmi_read_X(vmi, ctx, value, 2);
@@ -217,7 +220,7 @@ vmi_read_16(vmi_instance_t vmi,
 status_t
 vmi_read_32(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint32_t * value)
 {
     return vmi_read_X(vmi, ctx, value, 4);
@@ -226,7 +229,7 @@ vmi_read_32(
 status_t
 vmi_read_64(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     uint64_t * value)
 {
     return vmi_read_X(vmi, ctx, value, 8);
@@ -235,12 +238,13 @@ vmi_read_64(
 status_t
 vmi_read_addr(
     vmi_instance_t vmi,
-    access_context_t *ctx,
+    const access_context_t *ctx,
     addr_t *value)
 {
     status_t ret = VMI_FAILURE;
 
     switch (vmi->page_mode) {
+        case VMI_PM_AARCH64:// intentional fall-through
         case VMI_PM_IA32E:
             ret = vmi_read_X(vmi, ctx, value, 8);
             break;
@@ -263,7 +267,7 @@ vmi_read_addr(
 char *
 vmi_read_str(
     vmi_instance_t vmi,
-    access_context_t *ctx)
+    const access_context_t *ctx)
 {
     unsigned char *memory = NULL;
     char *rtnval = NULL;
@@ -283,6 +287,9 @@ vmi_read_str(
             addr = ctx->addr;
             break;
         case VMI_TM_KERNEL_SYMBOL:
+            if (!vmi->arch_interface || !vmi->os_interface || !vmi->kpgd)
+              return 0;
+
             dtb = vmi->kpgd;
             addr = vmi_translate_ksym2v(vmi, ctx->ksym);
             break;
@@ -291,6 +298,9 @@ vmi_read_str(
                 dtb = vmi_pid_to_dtb(vmi, ctx->pid);
             } else {
                 dtb = vmi->kpgd;
+            }
+            if (!dtb) {
+                return 0;
             }
             addr = ctx->addr;
             break;
@@ -307,13 +317,11 @@ vmi_read_str(
 
         addr += len;
         if(dtb) {
-            paddr = vmi_pagetable_lookup(vmi, dtb, addr);
+            if (VMI_SUCCESS != vmi_pagetable_lookup_cache(vmi, dtb, addr, &paddr)) {
+                return rtnval;
+            }
         } else {
             paddr = addr;
-        }
-
-        if (!paddr) {
-            return rtnval;
         }
 
         /* access the memory */
@@ -347,6 +355,17 @@ vmi_read_str(
     return rtnval;
 }
 
+unicode_string_t*
+vmi_read_unicode_str(
+    vmi_instance_t vmi,
+    const access_context_t *ctx)
+{
+    if (vmi->os_interface && vmi->os_interface->os_read_unicode_struct)
+        return vmi->os_interface->os_read_unicode_struct(vmi, ctx);
+
+    return NULL;
+}
+
 ///////////////////////////////////////////////////////////
 // Easy access to physical memory
 static inline status_t
@@ -354,7 +373,7 @@ vmi_read_X_pa(
     vmi_instance_t vmi,
     addr_t paddr,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_read = vmi_read_pa(vmi, paddr, value, size);
 
@@ -411,6 +430,7 @@ vmi_read_addr_pa(
     status_t ret = VMI_FAILURE;
 
     switch(vmi->page_mode) {
+        case VMI_PM_AARCH64:// intentional fall-through
         case VMI_PM_IA32E:
             ret = vmi_read_X_pa(vmi, paddr, value, 8);
             break;
@@ -453,7 +473,7 @@ vmi_read_X_va(
     addr_t vaddr,
     vmi_pid_t pid,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_read = vmi_read_va(vmi, vaddr, pid, value, size);
 
@@ -515,6 +535,7 @@ vmi_read_addr_va(
     status_t ret = VMI_FAILURE;
 
     switch(vmi->page_mode) {
+        case VMI_PM_AARCH64:// intentional fall-through
         case VMI_PM_IA32E:
             ret = vmi_read_X_va(vmi, vaddr, pid, value, 8);
             break;
@@ -553,12 +574,13 @@ vmi_read_str_va(
 
 unicode_string_t *
 vmi_read_unicode_str_va(vmi_instance_t vmi, addr_t vaddr, vmi_pid_t pid) {
-    unicode_string_t *ret = NULL;
-    if (vmi->os_interface && vmi->os_interface->os_read_unicode_struct) {
-        ret = vmi->os_interface->os_read_unicode_struct(vmi, vaddr, pid);
-    }
+    access_context_t ctx = {
+        .translate_mechanism = VMI_TM_PROCESS_PID,
+        .addr = vaddr,
+        .pid = pid
+    };
 
-    return ret;
+    return vmi_read_unicode_str(vmi, &ctx);
 }
 
 ///////////////////////////////////////////////////////////
@@ -568,7 +590,7 @@ vmi_read_X_ksym(
     vmi_instance_t vmi,
     char *sym,
     void *value,
-    int size)
+    size_t size)
 {
     size_t len_read = vmi_read_ksym(vmi, sym, value, size);
 
@@ -625,6 +647,7 @@ vmi_read_addr_ksym(
     status_t ret = VMI_FAILURE;
 
     switch(vmi->page_mode) {
+        case VMI_PM_AARCH64:// intentional fall-through
         case VMI_PM_IA32E:
             ret = vmi_read_X_ksym(vmi, sym, value, 8);
             break;

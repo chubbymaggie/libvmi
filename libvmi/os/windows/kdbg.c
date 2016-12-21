@@ -200,7 +200,6 @@ kdbg_symbol_resolve(
 
 static status_t
 kdbg_symbol_offset(
-    vmi_instance_t vmi,
     const char *symbol,
     unsigned long *offset)
 {
@@ -769,7 +768,7 @@ status_t find_kdbg_address(
     *kdbg_pa = 0;
     addr_t paddr = 0;
     unsigned char haystack[VMI_PS_4KB];
-    addr_t memsize = vmi_get_memsize(vmi);
+    addr_t memsize = vmi_get_max_physical_address(vmi);
 
     void *bm64 = boyer_moore_init((unsigned char *)"\x00\xf8\xff\xffKDBG", 8);
     void *bm32 = boyer_moore_init((unsigned char *)"\x00\x00\x00\x00\x00\x00\x00\x00KDBG",
@@ -799,8 +798,12 @@ status_t find_kdbg_address(
 
             // Read "KernBase" from the haystack
             long unsigned int kernbase_offset = 0;
-            kdbg_symbol_offset(vmi, "KernBase", &kernbase_offset);
-            *kernel_va = *(uint64_t *)&haystack[(unsigned int) match_offset - find_ofs + kernbase_offset];
+            kdbg_symbol_offset("KernBase", &kernbase_offset);
+
+            if ( match_offset - find_ofs + kernbase_offset + sizeof(uint64_t) >= VMI_PS_4KB )
+                continue;
+
+            memcpy(kernel_va, &haystack[(unsigned int) match_offset - find_ofs + kernbase_offset], sizeof(uint64_t));
             *kdbg_pa = paddr + (unsigned int) match_offset - find_ofs;
 
             ret = VMI_SUCCESS;
@@ -811,7 +814,6 @@ status_t find_kdbg_address(
 
     dbprint(VMI_DEBUG_MISC, "--Found KdDebuggerDataBlock at PA %.16"PRIx64"\n", *kdbg_pa);
 
-exit:
     boyer_moore_fini(bm32);
     boyer_moore_fini(bm64);
     return ret;
@@ -833,7 +835,7 @@ find_kdbg_address_fast(
         return ret;
     }
 
-    addr_t memsize = vmi_get_memsize(vmi);
+    addr_t memsize = vmi_get_max_physical_address(vmi);
     GSList *va_pages = vmi_get_va_pages(vmi, (addr_t)cr3);
     size_t read = 0;
     void *bm = 0;   // boyer-moore internal state
@@ -859,7 +861,6 @@ find_kdbg_address_fast(
         // so we are just going to split them to 4Kb pages
         while(vap && vap->size >= VMI_PS_4KB) {
             vap->size -= VMI_PS_4KB;
-            addr_t page_vaddr = vap->vaddr+vap->size;
             addr_t page_paddr = vap->paddr+vap->size;
 
             if(page_paddr + VMI_PS_4KB - 1 > memsize) {
@@ -937,20 +938,25 @@ find_kdbg_address_faster(
     void *bm = boyer_moore_init((unsigned char *)"KDBG", 4);
     int find_ofs = 0x10;
 
-    reg_t cr3, fsgs;
+    reg_t cr3 = 0, fsgs = 0;
     if(VMI_FAILURE == driver_get_vcpureg(vmi, &cr3, CR3, 0)) {
         goto done;
     }
 
-    if (VMI_PM_IA32E == vmi->page_mode) {
-        if(VMI_FAILURE == driver_get_vcpureg(vmi, &fsgs, GS_BASE, 0)) {
+    switch ( vmi->page_mode )
+    {
+        case VMI_PM_IA32E:
+            if(VMI_FAILURE == driver_get_vcpureg(vmi, &fsgs, GS_BASE, 0))
+                goto done;
+            break;
+        case VMI_PM_LEGACY: /* Fall-through */
+        case VMI_PM_PAE:
+            if(VMI_FAILURE == driver_get_vcpureg(vmi, &fsgs, FS_BASE, 0))
+                goto done;
+            break;
+        default:
             goto done;
-        }
-    } else if(VMI_PM_LEGACY == vmi->page_mode || VMI_PM_PAE == vmi->page_mode) {
-        if(VMI_FAILURE == driver_get_vcpureg(vmi, &fsgs, FS_BASE, 0)) {
-            goto done;
-        }
-    }
+    };
 
     // We start the search from the KPCR, which has to be mapped into the kernel.
     // We further know that the Windows kernel is page aligned
@@ -962,14 +968,18 @@ find_kdbg_address_faster(
     // start searching at the lower part from the kpcr
     // then switch to the upper part if needed
     int step = -VMI_PS_4KB;
-    addr_t page_paddr = 0;
+    addr_t page_paddr;
+    access_context_t ctx = {
+        .translate_mechanism = VMI_TM_NONE,
+    };
 
 scan:
     page_paddr = (vmi_pagetable_lookup(vmi, cr3, fsgs) >> 12) << 12;
-    for(; page_paddr + step < vmi->size ; page_paddr += step) {
+    for(; page_paddr + step < vmi->max_physical_address; page_paddr += step) {
 
         uint8_t page[VMI_PS_4KB];
-        status_t rc = peparse_get_image_phys(vmi, page_paddr, VMI_PS_4KB, page);
+        ctx.addr = page_paddr;
+        status_t rc = peparse_get_image(vmi, &ctx, VMI_PS_4KB, page);
         if(VMI_FAILURE == rc) {
             continue;
         }
@@ -984,13 +994,13 @@ scan:
         addr_t export_header_offset =
             peparse_get_idd_rva(IMAGE_DIRECTORY_ENTRY_EXPORT, &optional_header_type, optional_pe_header, NULL, NULL);
 
-        if(!export_header_offset || page_paddr + export_header_offset > vmi->size)
+        if(!export_header_offset || page_paddr + export_header_offset >= vmi->max_physical_address)
             continue;
 
         uint32_t nbytes = vmi_read_pa(vmi, page_paddr + export_header_offset, &et, sizeof(struct export_table));
         if(nbytes == sizeof(struct export_table) && !(et.export_flags || !et.name) ) {
 
-            if(page_paddr + et.name + 12 > vmi->size)
+            if(page_paddr + et.name + 12 >= vmi->max_physical_address)
                 continue;
 
             unsigned char name[13] = {0};
@@ -1137,7 +1147,7 @@ windows_kdbg_lookup(
     status_t ret = VMI_FAILURE;
     unsigned long offset = 0;
 
-    if (VMI_FAILURE == kdbg_symbol_offset(vmi, symbol, &offset)) {
+    if (VMI_FAILURE == kdbg_symbol_offset(symbol, &offset)) {
         goto done;
     }
     if (VMI_FAILURE == kdbg_symbol_resolve(vmi, offset, address)) {
@@ -1154,7 +1164,7 @@ done:
  * This functions is responsible for setting up
  * Windows specific variables:
  *  - ntoskrnl (*)
- *  - ntoskrnl_va
+ *  - ntoskrnl_va (*)
  *  - kdbg_offset (*)
  *  - kdbg_va (*)
  * The variables marked with (*) can be also specified
@@ -1167,7 +1177,6 @@ init_from_kdbg(
     status_t ret = VMI_FAILURE;
     addr_t kernbase_pa = 0;
     addr_t kernbase_va = 0;
-    addr_t kdbg_va = 0;
     addr_t kdbg_pa = 0;
 
     if (vmi->os_data == NULL) {
@@ -1219,7 +1228,7 @@ init_from_kdbg(
     } else if (windows->ntoskrnl && windows->kdbg_offset) {
         /* Calculate ntoskrnl_va and kdbg_va */
         unsigned long offset = 0;
-        kdbg_symbol_offset(vmi, "KernBase", &offset);
+        kdbg_symbol_offset("KernBase", &offset);
         if(VMI_FAILURE == vmi_read_addr_pa(vmi, windows->ntoskrnl + windows->kdbg_offset + offset, &windows->ntoskrnl_va)) {
             errprint("Inconsistent addresses passed in the config!\n");
             goto exit;

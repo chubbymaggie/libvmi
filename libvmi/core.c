@@ -32,6 +32,7 @@
 #include <fnmatch.h>
 #include <sys/types.h>
 #include <pwd.h>
+#include <unistd.h>
 
 #include "private.h"
 #include "driver/driver_wrapper.h"
@@ -51,8 +52,24 @@ open_config_file(
     char *location;
     char *sudo_user = NULL;
     struct passwd *pw_entry = NULL;
+    char cwd[1024] = { 0 };
 
-    /* first check home directory of sudo user */
+    /* check current directory */
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        location = safe_malloc(snprintf(NULL,0,"%s/libvmi.conf",
+                                       cwd)+1);
+        sprintf(location, "%s/libvmi.conf", cwd);
+        dbprint(VMI_DEBUG_CORE, "--looking for config file at %s\n", location);
+
+        f = fopen(location, "r");
+
+        if (f) {
+            goto success;
+        }
+        free(location);
+    }
+
+    /* next check home directory of sudo user */
     if ((sudo_user = getenv("SUDO_USER")) != NULL) {
         if ((pw_entry = getpwnam(sudo_user)) != NULL) {
             location = safe_malloc(snprintf(NULL,0,"%s/etc/libvmi.conf",
@@ -135,6 +152,18 @@ set_os_type_from_config(
         ret = VMI_FAILURE;
     }
 
+#ifdef VMI_DEBUG
+    if (vmi->os_type == VMI_OS_LINUX) {
+        dbprint(VMI_DEBUG_CORE, "**set os_type to Linux.\n");
+    }
+    else if (vmi->os_type == VMI_OS_WINDOWS) {
+        dbprint(VMI_DEBUG_CORE, "**set os_type to Windows.\n");
+    }
+    else {
+        dbprint(VMI_DEBUG_CORE, "**set os_type to unknown.\n");
+    }
+#endif
+
     return ret;
 }
 
@@ -158,7 +187,6 @@ status_t read_config_string(vmi_instance_t vmi,
     sprintf(config_str, "%s %s", vmi->image_type, config);
 
     config_file = fmemopen(config_str, length, "r");
-
     ret = read_config_file(vmi, config_file);
 
     free(config_str);
@@ -205,18 +233,6 @@ read_config_file(
         ret = VMI_SUCCESS;
     }
 
-#ifdef VMI_DEBUG
-    if (vmi->os_type == VMI_OS_LINUX) {
-        dbprint(VMI_DEBUG_CORE, "**set os_type to Linux.\n");
-    }
-    else if (vmi->os_type == VMI_OS_WINDOWS) {
-        dbprint(VMI_DEBUG_CORE, "**set os_type to Windows.\n");
-    }
-    else {
-        dbprint(VMI_DEBUG_CORE, "**set os_type to unknown.\n");
-    }
-#endif
-
 error_exit:
     if (config_file)
         fclose(config_file);
@@ -240,7 +256,7 @@ static status_t
 set_driver_type(
     vmi_instance_t vmi,
     vmi_mode_t mode,
-    unsigned long id,
+    uint64_t id,
     const char *name)
 {
     if (VMI_AUTO == mode) {
@@ -277,8 +293,7 @@ set_image_type_for_file(
 static status_t
 set_id_and_name(
     vmi_instance_t vmi,
-    vmi_mode_t mode,
-    unsigned long id,
+    uint64_t id,
     const char *name)
 {
 
@@ -306,7 +321,7 @@ set_id_and_name(
     /* resolve and set id from name */
     if (name) {
         if (VMI_INVALID_DOMID != (id = driver_get_id_from_name(vmi, name)) ) {
-            dbprint(VMI_DEBUG_CORE, "--got id from name (%s --> %lu)\n", name, id);
+            dbprint(VMI_DEBUG_CORE, "--got id from name (%s --> %"PRIu64")\n", name, id);
             driver_set_id(vmi, id);
             vmi->image_type = strndup(name, 100);
             driver_set_name(vmi, name);
@@ -327,7 +342,7 @@ set_id_and_name(
 
     char *tmp_name = NULL;
     if (VMI_SUCCESS == driver_get_name_from_id(vmi, id, &tmp_name)) {
-        dbprint(VMI_DEBUG_CORE, "--got name from id (%lu --> %s)\n", id, tmp_name);
+        dbprint(VMI_DEBUG_CORE, "--got name from id (%"PRIu64" --> %s)\n", id, tmp_name);
         vmi->image_type = strndup(tmp_name, 100);
         driver_set_name(vmi, tmp_name);
         free(tmp_name);
@@ -340,8 +355,8 @@ set_id_and_name(
     // Only under Xen this is OK without Xenstore
     if (vmi->mode == VMI_XEN) {
         // create placeholder for image_type
-        char *idstring = g_malloc0(snprintf(NULL, 0, "domid-%lu", id) + 1);
-        sprintf(idstring, "domid-%lu", id);
+        char *idstring = g_malloc0(snprintf(NULL, 0, "domid-%"PRIu64, id) + 1);
+        sprintf(idstring, "domid-%"PRIu64, id);
         vmi->image_type = idstring;
         goto done;
     }
@@ -358,7 +373,7 @@ static status_t
 vmi_init_private(
     vmi_instance_t *vmi,
     uint32_t flags,
-    unsigned long id,
+    uint64_t id,
     const char *name,
     vmi_config_t config)
 {
@@ -413,7 +428,7 @@ vmi_init_private(
     dbprint(VMI_DEBUG_CORE, "--completed driver init.\n");
 
     /* resolve the id and name */
-    if (VMI_FAILURE == set_id_and_name(*vmi, access_mode, id, name)) {
+    if (VMI_FAILURE == set_id_and_name(*vmi, id, name)) {
         goto error_exit;
     }
 
@@ -428,12 +443,15 @@ vmi_init_private(
     }
 
     /* get the memory size */
-    if (driver_get_memsize(*vmi, &(*vmi)->size) == VMI_FAILURE) {
+    if (driver_get_memsize(*vmi, &(*vmi)->allocated_ram_size, &(*vmi)->max_physical_address) == VMI_FAILURE) {
         errprint("Failed to get memory size.\n");
         goto error_exit;
     }
-    dbprint(VMI_DEBUG_CORE, "**set size = %"PRIu64" [0x%"PRIx64"]\n", (*vmi)->size,
-        (*vmi)->size);
+
+    dbprint(VMI_DEBUG_CORE, "**set allocated_ram_size = %"PRIx64", "
+                            "max_physical_address = 0x%"PRIx64"\n",
+                            (*vmi)->allocated_ram_size,
+                            (*vmi)->max_physical_address);
 
     // for file mode we need os-specific heuristics to deduce the architecture
     // for live mode, having arch_interface set even in VMI_PARTIAL mode
@@ -523,16 +541,14 @@ vmi_init_private(
     }
 
     if(init_mode & VMI_INIT_EVENTS) {
-#if ENABLE_XEN_EVENTS == 1
         /* Enable event handlers */
         events_init(*vmi);
-#else
-        errprint("LibVMI wasn't compiled with events support!\n");
-        status = VMI_FAILURE;
-#endif
     }
 
 error_exit:
+    if ( VMI_FAILURE == status )
+        vmi_destroy(*vmi);
+
     return status;
 }
 
@@ -563,28 +579,16 @@ vmi_init_custom(
         ret = vmi_init(vmi, flags, (char *)config);
         goto _done;
 
-    } else if (VMI_CONFIG_STRING == config_mode) {
-        char *name = NULL;
-
-        if (VMI_FILE == (*vmi)->mode) {
-            name = strdup((*vmi)->image_type_complete);
-        } else {
-            name = strdup((*vmi)->image_type);
-        }
-
-        ret = vmi_init_private(vmi, flags, VMI_INVALID_DOMID, name,
-                (vmi_config_t)config);
-
     } else if (VMI_CONFIG_GHASHTABLE == config_mode) {
 
         char *name = NULL;
-        unsigned long domid = VMI_INVALID_DOMID;
+        uint64_t domid = VMI_INVALID_DOMID;
         GHashTable *configtbl = (GHashTable *)config;
         gpointer idptr = NULL;
 
         name = (char *)g_hash_table_lookup(configtbl, "name");
         if(g_hash_table_lookup_extended(configtbl, "domid", NULL, &idptr)) {
-            domid = *(unsigned long *)idptr;
+            domid = *(uint64_t *)idptr;
         }
 
         if (name != NULL && domid != VMI_INVALID_DOMID) {
@@ -623,7 +627,6 @@ vmi_init_complete(
         name = strdup((*vmi)->image_type);
     }
 
-
     if(config) {
         flags |= VMI_CONFIG_STRING;
     } else if(name && ((*vmi)->config_mode & VMI_CONFIG_GLOBAL_FILE_ENTRY)) {
@@ -650,7 +653,28 @@ vmi_init_complete_custom(
     uint32_t flags,
     vmi_config_t config)
 {
+    if (!vmi)
+        return VMI_FAILURE;
+
     flags |= VMI_INIT_COMPLETE | (*vmi)->mode;
+
+    if ( flags & VMI_CONFIG_STRING ) {
+        char *name = NULL;
+
+        if (VMI_FILE == (*vmi)->mode) {
+            name = strdup((*vmi)->image_type_complete);
+        } else {
+            name = strdup((*vmi)->image_type);
+        }
+
+        vmi_destroy(*vmi);
+        return vmi_init_private(vmi,
+                                flags,
+                                VMI_INVALID_DOMID,
+                                name,
+                                (vmi_config_t)config);
+    }
+
     vmi_destroy(*vmi);
     return vmi_init_custom(vmi, flags, config);
 }
@@ -680,8 +704,8 @@ vmi_destroy(
         return VMI_FAILURE;
 
     vmi->shutting_down = TRUE;
-    events_destroy(vmi);
     driver_destroy(vmi);
+    events_destroy(vmi);
     if (vmi->os_interface) {
         os_destroy(vmi);
     }
@@ -707,4 +731,20 @@ vmi_destroy(
         free(vmi->image_type);
     free(vmi);
     return VMI_SUCCESS;
+}
+
+vmi_arch_t
+vmi_get_library_arch()
+{
+#ifdef I386
+    return VMI_ARCH_X86;
+#elif X86_64
+    return VMI_ARCH_X86_64;
+#elif ARM32
+    return VMI_ARCH_ARM32;
+#elif ARM64
+    return VMI_ARCH_ARM64;
+#endif
+
+    return VMI_ARCH_UNKNOWN;
 }

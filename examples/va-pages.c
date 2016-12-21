@@ -52,7 +52,7 @@ void free_va_pages() {
     va_pages = NULL;
 }
 
-void cr3_callback(vmi_instance_t vmi, vmi_event_t *event) {
+event_response_t cr3_callback(vmi_instance_t vmi, vmi_event_t *event) {
 
     va_pages = vmi_get_va_pages(vmi, event->reg_event.value);
 
@@ -70,13 +70,14 @@ void cr3_callback(vmi_instance_t vmi, vmi_event_t *event) {
         uint64_t test;
         if(VMI_FAILURE == vmi_read_64(vmi, &ctx, &test)) {
             printf("Page in virtual address space of DTB 0x%"PRIx64" unaccessible: 0x%"PRIx64".\t"
-                "Size: 0x%"PRIu64"\n",
-                ctx.dtb, page->vaddr, page->size);
+                "Size: 0x%"PRIx64"\n",
+                ctx.dtb, page->vaddr, (uint64_t)page->size);
         }
 
         loop=loop->next;
     }
     free_va_pages();
+    return 0;
 }
 
 int main (int argc, char **argv)
@@ -88,7 +89,6 @@ int main (int argc, char **argv)
 
     char *name = NULL;
     va_pages = NULL;
-    vmi_pid_t pid = -1;
 
     if(argc < 2){
         fprintf(stderr, "Usage: events_example <name of VM>\n");
@@ -136,7 +136,6 @@ int main (int argc, char **argv)
     }
     printf("Finished with test.\n");
 
-leave:
     free_va_pages();
     // cleanup any memory associated with the libvmi instance
     vmi_destroy(vmi);

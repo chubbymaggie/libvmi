@@ -42,12 +42,15 @@
 #include <inttypes.h>
 #include "libvmi.h"
 #include "libvmi_extra.h"
+#include "cache.h"
 #include "events.h"
 #include "shm.h"
+#include "slat.h"
+#include "rekall.h"
+#include "debug.h"
 #include "driver/driver_interface.h"
 #include "arch/arch_interface.h"
 #include "os/os_interface.h"
-#include "debug.h"
 
 /**
  * @brief LibVMI Instance.
@@ -83,17 +86,33 @@ struct vmi_instance {
 
     addr_t init_task;       /**< address of task struct for init */
 
-    int pae;                /**< nonzero if PAE is enabled */
+    union {
+        struct {
+            int pae;        /**< nonzero if PAE is enabled */
 
-    int pse;                /**< nonzero if PSE is enabled */
+            int pse;        /**< nonzero if PSE is enabled */
 
-    int lme;                /**< nonzero if LME is enabled */
+            int lme;        /**< nonzero if LME is enabled */
+        } x86;
+
+        struct {
+            int t0sz;           /**< TTBR0 VA size (2^(64-t0sz)) */
+
+            int t1sz;           /**< TTBR1 VA size (2^(64-t1sz)) */
+
+            page_size_t tg0;    /**< TTBR0 granule size: 4KB/16KB/64KB */
+
+            page_size_t tg1;    /**< TTBR1 granule size: 4KB/16KB/64KB */
+        } arm64;
+    };
 
     page_mode_t page_mode;  /**< paging mode in use */
 
     arch_interface_t arch_interface; /**< architecture specific functions */
 
-    uint64_t size;          /**< total size of target's memory */
+    uint64_t allocated_ram_size; /**< total size of target's allocated memory */
+
+    addr_t max_physical_address; /**< maximum valid physical memory address + 1 */
 
     int hvm;                /**< nonzero if HVM */
 
@@ -118,11 +137,9 @@ struct vmi_instance {
 #if ENABLE_PAGE_CACHE == 1
     GHashTable *memory_cache;  /**< hash table for memory cache */
 
-    GList *memory_cache_lru;  /**< list holding the most recently used pages */
+    GQueue *memory_cache_lru;  /**< queue holding the most recently used pages */
 
     uint32_t memory_cache_age; /**< max age of memory cache entry */
-
-    uint32_t memory_cache_size;/**< current size of memory cache */
 
     uint32_t memory_cache_size_max;/**< max size of memory cache */
 #else
@@ -135,9 +152,17 @@ struct vmi_instance {
 
     int event_listener_required; /**< Non-zero if event listener is required for the domain to run */
 
+    vmi_event_t *guest_requested_event; /**< Handler of guest-requested events */
+
+    vmi_event_t *cpuid_event; /**< Handler of CPUID events */
+
+    vmi_event_t *debug_event; /**< Handler of debug exception events */
+
     GHashTable *interrupt_events; /**< interrupt event to function mapping (key: interrupt) */
 
-    GHashTable *mem_events; /**< mem event to functions mapping (key: physical address) */
+    GHashTable *mem_events_on_gfn; /**< mem event to functions mapping (key: physical address) */
+
+    GHashTable *mem_events_generic; /**< mem event to functions mapping (key: access type) */
 
     GHashTable *reg_events; /**< reg event to functions mapping (key: reg) */
 
@@ -147,19 +172,14 @@ struct vmi_instance {
 
     uint32_t step_vcpus[MAX_SINGLESTEP_VCPUS]; /**< counter of events on vcpus for which we have internal singlestep enabled */
 
+    gboolean event_callback; /**< flag indicating that libvmi is currently issuing an event callback */
+
+    GHashTable *clear_events; /**< table to save vmi_clear_event requests when event_callback is set */
+
     gboolean shutting_down; /**< flag indicating that libvmi is shutting down */
+
+    GSList *swap_events; /**< list to save vmi_swap_events requests when event_callback is set */
 };
-
-/** Page-level memevent struct to also hold byte-level events in the embedded hashtable */
-typedef struct memevent_page {
-
-    vmi_mem_access_t access_flag; /**< combined page access flag */
-    vmi_event_t *event; /**< page event registered */
-    addr_t key; /**< page # */
-
-    GHashTable  *byte_events; /**< byte events */
-
-} memevent_page_t;
 
 /** Event singlestep reregister wrapper */
 typedef struct step_and_reg_event_wrapper {
@@ -168,6 +188,13 @@ typedef struct step_and_reg_event_wrapper {
     uint64_t steps;
     event_callback_t cb;
 } step_and_reg_event_wrapper_t;
+
+/** Event swap wrapper */
+typedef struct swap_wrapper {
+    vmi_event_t *swap_from;
+    vmi_event_t *swap_to;
+    vmi_event_free_t free_routine;
+} swap_wrapper_t;
 
 /** Windows' UNICODE_STRING structure (x86) */
 typedef struct _windows_unicode_string32 {
@@ -178,12 +205,21 @@ typedef struct _windows_unicode_string32 {
     win32_unicode_string_t;
 
 /** Windows' UNICODE_STRING structure (x64) */
-    typedef struct _windows_unicode_string64 {
-        uint16_t length;
-        uint16_t maximum_length;
-        uint64_t pBuffer;   // pointer to string contents
-    } __attribute__ ((packed))
+typedef struct _windows_unicode_string64 {
+    uint16_t length;
+    uint16_t maximum_length;
+    uint32_t padding;   // align pBuffer
+    uint64_t pBuffer;   // pointer to string contents
+} __attribute__ ((packed))
     win64_unicode_string_t;
+
+/*----------------------------------------------
+ * Misc functions
+ */
+static inline
+addr_t canonical_addr(addr_t va) {
+    return VMI_GET_BIT(va, 47) ? (va | 0xffff000000000000) : va;
+}
 
 /*----------------------------------------------
  * convenience.c
@@ -217,6 +253,18 @@ typedef struct _windows_unicode_string32 {
     vmi_instance_t vmi,
     addr_t addr);
 
+#ifdef __GNUC__
+#  define UNUSED(x) UNUSED_ ## x __attribute__((__unused__))
+#else
+#  define UNUSED(x) UNUSED_ ## x
+#endif
+
+#ifdef __GNUC__
+#  define UNUSED_FUNCTION(x) __attribute__((__unused__)) UNUSED_ ## x
+#else
+#  define UNUSED_FUNCTION(x) UNUSED_ ## x
+#endif
+
 /*-------------------------------------
  * accessors.c
  */
@@ -224,121 +272,17 @@ typedef struct _windows_unicode_string32 {
     vmi_instance_t vmi,
     addr_t frame_num);
 
-/*-------------------------------------
- * cache.c
- */
-    void pid_cache_init(
-    vmi_instance_t vmi);
-    void pid_cache_destroy(
-    vmi_instance_t vmi);
-    status_t pid_cache_get(
+status_t vmi_pagetable_lookup_cache(
     vmi_instance_t vmi,
-    vmi_pid_t pid,
-    addr_t *dtb);
-    void pid_cache_set(
-    vmi_instance_t vmi,
-    vmi_pid_t pid,
-    addr_t dtb);
-    status_t pid_cache_del(
-    vmi_instance_t vmi,
-    vmi_pid_t pid);
-    void pid_cache_flush(
-    vmi_instance_t vmi);
-
-    void sym_cache_init(
-    vmi_instance_t vmi);
-    void sym_cache_destroy(
-    vmi_instance_t vmi);
-    status_t sym_cache_get(
-    vmi_instance_t vmi,
-    addr_t base_addr,
-    vmi_pid_t pid,
-    const char *sym,
-    addr_t *va);
-    void sym_cache_set(
-    vmi_instance_t vmi,
-    addr_t base_addr,
-    vmi_pid_t pid,
-    const char *sym,
-    addr_t va);
-    status_t sym_cache_del(
-    vmi_instance_t vmi,
-    addr_t base_addr,
-    vmi_pid_t pid,
-    char *sym);
-    void sym_cache_flush(
-    vmi_instance_t vmi);
-
-    void rva_cache_init(
-        vmi_instance_t vmi);
-    void rva_cache_destroy(
-        vmi_instance_t vmi);
-    status_t rva_cache_get(
-        vmi_instance_t vmi,
-        addr_t base_addr,
-        vmi_pid_t pid,
-        addr_t rva,
-        char **sym);
-    void rva_cache_set(
-        vmi_instance_t vmi,
-        addr_t base_addr,
-        vmi_pid_t pid,
-        addr_t rva,
-        char *sym);
-    status_t rva_cache_del(
-        vmi_instance_t vmi,
-        addr_t base_addr,
-        vmi_pid_t pid,
-        addr_t rva);
-
-    void v2p_cache_init(
-    vmi_instance_t vmi);
-    void v2p_cache_destroy(
-    vmi_instance_t vmi);
-    status_t v2p_cache_get(
-    vmi_instance_t vmi,
-    addr_t va,
     addr_t dtb,
-    addr_t *pa);
-    void v2p_cache_set(
-    vmi_instance_t vmi,
-    addr_t va,
-    addr_t dtb,
-    addr_t pa);
-    status_t v2p_cache_del(
-    vmi_instance_t vmi,
-    addr_t va,
-    addr_t dtb);
-    void v2p_cache_flush(
-    vmi_instance_t vmi);
-#if ENABLE_SHM_SNAPSHOT == 1
-    void v2m_cache_init(
-    vmi_instance_t vmi);
-    void v2m_cache_destroy(
-    vmi_instance_t vmi);
-    status_t v2m_cache_get(
-    vmi_instance_t vmi,
-    addr_t va,
-    pid_t pid,
-    addr_t *ma,
-    uint64_t *length);
-    void v2m_cache_set(
-    vmi_instance_t vmi,
-    addr_t va,
-    pid_t pid,
-    addr_t ma,
-    uint64_t length);
-    status_t v2m_cache_del(
-    vmi_instance_t vmi,
-    addr_t va,
-    pid_t pid);
-    void v2m_cache_flush(
-    vmi_instance_t vmi);
-#endif
+    addr_t vaddr,
+    addr_t *paddr);
 
 /*-----------------------------------------
  * memory.c
  */
+
+    #define PSR_MODE_BIT 0x10 // set on cpsr iff ARM32
 
     status_t find_page_mode_live(
     vmi_instance_t vmi);
@@ -382,8 +326,17 @@ typedef struct _windows_unicode_string32 {
         gpointer key,
         gpointer value,
         gpointer data);
-    typedef GHashTableIter event_iter_t;
-    #define for_each_event(vmi, iter, table, key, val) \
+    status_t swap_events(
+        vmi_instance_t vmi,
+        vmi_event_t *swap_from,
+        vmi_event_t *swap_to,
+        vmi_event_free_t free_routine);
+    gboolean clear_events(
+        gpointer key,
+        gpointer value,
+        gpointer data);
+
+    #define ghashtable_foreach(table, iter, key, val) \
         g_hash_table_iter_init(&iter, table); \
         while(g_hash_table_iter_next(&iter,(void**)key,(void**)val))
 

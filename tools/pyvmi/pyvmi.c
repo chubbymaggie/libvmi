@@ -177,7 +177,7 @@ pyvmi_init(
     if(vmname) {
         desc(object)=vmname;
     } else {
-        uint32_t domid = vmi_get_vmid(vmi(object));
+        uint64_t domid = vmi_get_vmid(vmi(object));
         char *domidstring = malloc(snprintf(NULL, 0, "domid-%u", domid)+1);
         sprintf(domidstring, "domid-%u", domid);
         desc(object)=domidstring;
@@ -510,7 +510,7 @@ pyvmi_write_pa(
     void *buf;
     int count;
 
-    if (!PyArg_ParseTuple(args, "Is#", &paddr, &buf, &count)) {
+    if (!PyArg_ParseTuple(args, "Ks#", &paddr, &buf, &count)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -537,7 +537,7 @@ pyvmi_write_va(
     void *buf;
     int count;
 
-    if (!PyArg_ParseTuple(args, "Iis#", &vaddr, &pid, &buf, &count)) {
+    if (!PyArg_ParseTuple(args, "Kis#", &vaddr, &pid, &buf, &count)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1012,7 +1012,9 @@ pyvmi_write_8_pa(
     addr_t paddr;
     uint8_t value;
 
-    if (!PyArg_ParseTuple(args, "Ic", &paddr, &value)) {
+    if (!PyArg_ParseTuple(args, "Kc", &paddr, &value) &&
+        !PyArg_ParseTuple(args, "KB", &paddr, &value)
+    ) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1035,7 +1037,7 @@ pyvmi_write_16_pa(
     addr_t paddr;
     uint16_t value;
 
-    if (!PyArg_ParseTuple(args, "IH", &paddr, &value)) {
+    if (!PyArg_ParseTuple(args, "KH", &paddr, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1058,7 +1060,7 @@ pyvmi_write_32_pa(
     addr_t paddr;
     uint32_t value;
 
-    if (!PyArg_ParseTuple(args, "II", &paddr, &value)) {
+    if (!PyArg_ParseTuple(args, "KI", &paddr, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1081,7 +1083,7 @@ pyvmi_write_64_pa(
     addr_t paddr;
     uint64_t value;
 
-    if (!PyArg_ParseTuple(args, "IK", &paddr, &value)) {
+    if (!PyArg_ParseTuple(args, "KK", &paddr, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1105,7 +1107,8 @@ pyvmi_write_8_va(
     int pid;
     uint8_t value;
 
-    if (!PyArg_ParseTuple(args, "Iic", &vaddr, &pid, &value)) {
+    if (!PyArg_ParseTuple(args, "Kic", &vaddr, &pid, &value) &&
+        !PyArg_ParseTuple(args, "KiB", &vaddr, &pid, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1129,7 +1132,7 @@ pyvmi_write_16_va(
     int pid;
     uint16_t value;
 
-    if (!PyArg_ParseTuple(args, "IiH", &vaddr, &pid, &value)) {
+    if (!PyArg_ParseTuple(args, "KiH", &vaddr, &pid, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1153,7 +1156,7 @@ pyvmi_write_32_va(
     int pid;
     uint32_t value;
 
-    if (!PyArg_ParseTuple(args, "IiI", &vaddr, &pid, &value)) {
+    if (!PyArg_ParseTuple(args, "KiI", &vaddr, &pid, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1177,7 +1180,7 @@ pyvmi_write_64_va(
     int pid;
     uint64_t value;
 
-    if (!PyArg_ParseTuple(args, "IiK", &vaddr, &pid, &value)) {
+    if (!PyArg_ParseTuple(args, "KiK", &vaddr, &pid, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
@@ -1200,7 +1203,8 @@ pyvmi_write_8_ksym(
     char *sym;
     uint8_t value;
 
-    if (!PyArg_ParseTuple(args, "sc", &sym, &value)) {
+    if (!PyArg_ParseTuple(args, "sc", &sym, &value) &&
+        !PyArg_ParseTuple(args, "sB", &sym, &value)) {
         PyErr_SetString(PyExc_ValueError,
                         "Invalid argument(s) to function");
         return NULL;
