@@ -1,5 +1,5 @@
-/* The LibVMI Library is an introspection library that simplifies access to 
- * memory in a target virtual machine or in a file containing a dump of 
+/* The LibVMI Library is an introspection library that simplifies access to
+ * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
  *
  * Copyright 2012 VMITools Project
@@ -37,37 +37,42 @@ START_TEST (test_libvmi_init4)
 {
     const char *name = get_testvm();
     vmi_instance_t vmi = NULL;
-    vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, name);
-    if (VMI_OS_WINDOWS == vmi_get_ostype(vmi) && VMI_OS_WINDOWS_XP == vmi_get_winver(vmi))
-    {
-
+    vmi_init_complete(&vmi, (void*)name, VMI_INIT_DOMAINNAME, NULL,
+                      VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL);
+    if (VMI_OS_WINDOWS == vmi_get_ostype(vmi) && VMI_OS_WINDOWS_XP == vmi_get_winver(vmi)) {
         char location[100];
         getcwd(location, sizeof(location));
 
 #define XP_REKALL_PROFILE_LIVE "ntkrnlpa.pdb.bd8f451f3e754ed8a34b50560ceb08e31.rekall.json"
 #define XP_REKALL_PROFILE_FILE "ntoskrnl.pdb.32962337f0f646388b39535cd8dd70e82.rekall.json"
 
-        char *sysmap = NULL;
-        if(vmi_get_access_mode(vmi) == VMI_FILE) {
-            sysmap = g_malloc0(snprintf(NULL,0,"%s/%s", location, XP_REKALL_PROFILE_FILE)+1);
-            sprintf(sysmap, "%s/%s", location, XP_REKALL_PROFILE_FILE);
+        char *rekall_profile = NULL;
+        vmi_mode_t mode;
+        if (VMI_FAILURE == vmi_get_access_mode(vmi, NULL, 0, NULL, &mode))
+            goto done;
+
+        if ( mode == VMI_FILE) {
+            rekall_profile = g_malloc0(snprintf(NULL,0,"%s/%s", location, XP_REKALL_PROFILE_FILE)+1);
+            sprintf(rekall_profile, "%s/%s", location, XP_REKALL_PROFILE_FILE);
         } else {
-            sysmap = g_malloc0(snprintf(NULL,0,"%s/%s", location, XP_REKALL_PROFILE_LIVE)+1);
-            sprintf(sysmap, "%s/%s", location, XP_REKALL_PROFILE_LIVE);
+            rekall_profile = g_malloc0(snprintf(NULL,0,"%s/%s", location, XP_REKALL_PROFILE_LIVE)+1);
+            sprintf(rekall_profile, "%s/%s", location, XP_REKALL_PROFILE_LIVE);
         }
 
         vmi_destroy(vmi);
 
         GHashTable *config = g_hash_table_new(g_str_hash, g_str_equal);
         g_hash_table_insert(config, "ostype", "Windows");
-        g_hash_table_insert(config, "name", name);
-        g_hash_table_insert(config, "sysmap", sysmap);
-        if(VMI_FAILURE == vmi_init_custom(&vmi, VMI_AUTO | VMI_INIT_COMPLETE | VMI_CONFIG_GHASHTABLE, config)) {
-            fail_unless(0, "failed to init XP test domain from Rekall profile %s.", sysmap);
+        g_hash_table_insert(config, "rekall_profile", rekall_profile);
+        if (VMI_FAILURE == vmi_init_complete(&vmi, (void*)name, VMI_INIT_DOMAINNAME, NULL,
+                                             VMI_CONFIG_GHASHTABLE, config, NULL)) {
+            fail_unless(0, "failed to init XP test domain from Rekall profile %s.", rekall_profile);
         }
         g_hash_table_destroy(config);
-        g_free(sysmap);
+        g_free(rekall_profile);
     }
+
+done:
     vmi_destroy(vmi);
 }
 END_TEST
@@ -76,15 +81,13 @@ END_TEST
 START_TEST (test_libvmi_init3)
 {
     FILE *f = NULL;
-    char *ptr = NULL;
+    const char *ptr = NULL;
     char location[100];
-    char *sudo_user = NULL;
+    const char *sudo_user = NULL;
     struct passwd *pw_entry = NULL;
     vmi_instance_t vmi = NULL;
-    status_t ret = vmi_init(&vmi, VMI_AUTO | VMI_INIT_PARTIAL, get_testvm());
 
     /* read the config entry from the config file */
-
     /* first check home directory of sudo user */
     if ((sudo_user = getenv("SUDO_USER")) != NULL) {
         if ((pw_entry = getpwnam(sudo_user)) != NULL) {
@@ -114,8 +117,7 @@ success:
     /* strip path for memory image files */
     if ((ptr = strrchr(get_testvm(), '/')) == NULL) {
         ptr = get_testvm();
-    }
-    else {
+    } else {
         ptr++;
     }
 
@@ -130,24 +132,24 @@ success:
     long pos = 0;
     size_t max_len = strnlen(ptr, 100);
     int found = 0;
-    for (pos = 0; pos < sz; ++pos){
-        if (strncmp(buf + pos, ptr, max_len) == 0){
+    for (pos = 0; pos < sz; ++pos) {
+        if (strncmp(buf + pos, ptr, max_len) == 0) {
             found = 1;
             break;
         }
     }
-    if (!found){
+    if (!found) {
         fail_unless(0, "failed to find config entry");
     }
     long start = pos + max_len;
     found = 0;
-    for ( ; pos < sz; ++pos){
-        if (buf[pos] == '}'){
+    for ( ; pos < sz; ++pos) {
+        if (buf[pos] == '}') {
             found = 1;
             break;
         }
     }
-    if (!found){
+    if (!found) {
         fail_unless(0, "failed to find end of config entry");
     }
     long end = pos + 1;
@@ -156,9 +158,10 @@ success:
     memcpy(config, buf + start, entry_length);
     free(buf);
 
-    /* complete the init */
-    ret = vmi_init_complete(&vmi, config);
+    status_t ret = vmi_init_complete(&vmi, (void*)get_testvm(), VMI_INIT_DOMAINNAME, NULL,
+                                     VMI_CONFIG_STRING, (void*)config, NULL);
     free(config);
+
     fail_unless(ret == VMI_SUCCESS,
                 "vmi_init_complete failed");
     fail_unless(vmi != NULL,
@@ -167,20 +170,19 @@ success:
 }
 END_TEST
 
-/* test partial init and init_complete function */
+/* test determine mode and init function */
 START_TEST (test_libvmi_init2)
 {
     vmi_instance_t vmi = NULL;
-    status_t ret = vmi_init(&vmi, VMI_AUTO | VMI_INIT_PARTIAL, get_testvm());
+    vmi_mode_t mode;
+    status_t ret = vmi_get_access_mode(vmi, (void*)get_testvm(), VMI_INIT_DOMAINNAME, NULL, &mode);
     fail_unless(ret == VMI_SUCCESS,
-                "vmi_init failed with AUTO | PARTIAL");
+                "vmi_get_access_mode failed to identify the hypervisor");
+    ret = vmi_init(&vmi, mode, (void*)get_testvm(), VMI_INIT_DOMAINNAME, NULL, NULL);
+    fail_unless(ret == VMI_SUCCESS,
+                "vmi_init failed");
     fail_unless(vmi != NULL,
                 "vmi_init failed to initialize vmi instance struct");
-    ret = vmi_init_complete(&vmi, NULL);
-    fail_unless(ret == VMI_SUCCESS,
-                "vmi_init_complete failed");
-    fail_unless(vmi != NULL,
-                "vmi_init_complete failed to initialize vmi instance struct");
     vmi_destroy(vmi);
 }
 END_TEST
@@ -189,9 +191,10 @@ END_TEST
 START_TEST (test_libvmi_init1)
 {
     vmi_instance_t vmi = NULL;
-    status_t ret = vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, get_testvm());
+    status_t ret = vmi_init_complete(&vmi, (void*)get_testvm(), VMI_INIT_DOMAINNAME, NULL,
+                                     VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL);
     fail_unless(ret == VMI_SUCCESS,
-                "vmi_init failed with AUTO | COMPLETE");
+                "vmi_init failed with VMI_INIT_DOMAINNAME and global config");
     fail_unless(vmi != NULL,
                 "vmi_init failed to initialize vmi instance struct");
     vmi_destroy(vmi);

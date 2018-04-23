@@ -1,5 +1,3 @@
-SUBDIRS = config
-
 h_public =  libvmi.h \
             libvmi_extra.h \
             slat.h \
@@ -55,33 +53,39 @@ c_sources   += shm.c
 endif
 
 drivers =
-if HAVE_FILE
+if WITH_FILE
 drivers     += driver/file/file.h \
                driver/file/file_private.h \
                driver/file/file.c
 endif
-if HAVE_KVM
+if WITH_KVM
 drivers     += driver/kvm/kvm.h \
                driver/kvm/kvm_private.h \
-               driver/kvm/kvm.c
+               driver/kvm/kvm.c \
+               driver/kvm/libvirt_wrapper.c \
+               driver/kvm/libvirt_wrapper.h
 if SHM
 drivers     += driver/kvm/kvm_shm.h
 endif
 endif
 
-if HAVE_XEN
+if WITH_XEN
 h_public    += events.h
 drivers     += driver/xen/altp2m.c \
                driver/xen/altp2m_private.h \
                driver/xen/xen.h \
                driver/xen/xen_private.h \
                driver/xen/xen.c \
+               driver/xen/xen_events.c \
                driver/xen/xen_events.h \
                driver/xen/xen_events_private.h \
                driver/xen/xen_events_46.c \
                driver/xen/xen_events_48.c \
                driver/xen/xen_events_legacy.c \
-               driver/xen/libxc_wrapper.c
+               driver/xen/libxc_wrapper.c \
+               driver/xen/libxc_wrapper.h \
+               driver/xen/libxs_wrapper.c \
+               driver/xen/libxs_wrapper.h
 endif
 
 os =
@@ -101,6 +105,13 @@ os          += os/linux/linux.h \
                os/linux/memory.c \
                os/linux/symbols.c
 endif
+if FREEBSD
+os          += os/freebsd/freebsd.h \
+               os/freebsd/core.c \
+               os/freebsd/memory.c \
+               os/freebsd/symbols.c
+endif
+
 
 library_includedir=$(includedir)/$(LIBRARY_NAME)
 library_include_HEADERS = $(h_public)
@@ -110,12 +121,19 @@ AM_CPPFLAGS = -I$(top_srcdir)
 
 lib_LTLIBRARIES= libvmi.la
 libvmi_la_SOURCES= $(h_public) $(h_private) $(drivers) $(os) $(c_sources)
-libvmi_la_LIBADD= config/libconfig.la
 libvmi_la_CFLAGS= -fvisibility=hidden $(GLIB_CFLAGS)
 libvmi_la_CFLAGS+= -Wall -Wextra
-libvmi_la_LDFLAGS= -release $(RELEASE) $(GLIB_LIBS)
+libvmi_la_LDFLAGS= $(GLIB_LIBS) -no-undefined
+libvmi_la_LDFLAGS+= -version-info $(VERSION)
+
+if CONFIGFILE
+libvmi_la_LIBADD= config/libconfig.la
+endif
 
 if DEBUG
 libvmi_la_CFLAGS+= -Werror
-libvmi_la_CFLAGS+= -Wno-missing-field-initializers -Wno-unused-but-set-variable
+libvmi_la_CFLAGS+= -Wno-missing-field-initializers
+libvmi_la_CFLAGS+= -Wno-missing-braces
+libvmi_la_CFLAGS+= -Wno-unused-result
+libvmi_la_CFLAGS+= -Wno-ignored-attributes
 endif

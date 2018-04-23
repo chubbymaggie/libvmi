@@ -33,13 +33,15 @@ void linux_read_config_ghashtable_entries(char* key, gpointer value,
         vmi_instance_t vmi);
 
 static status_t linux_filemode_32bit_init(vmi_instance_t vmi,
-                                          addr_t swapper_pg_dir,
-                                          addr_t boundary,
-                                          addr_t pa, addr_t va)
+        addr_t swapper_pg_dir,
+        addr_t boundary,
+        addr_t pa, addr_t va)
 {
+    addr_t test = 0;
     vmi->page_mode = VMI_PM_LEGACY;
     if (VMI_SUCCESS == arch_init(vmi)) {
-        if (pa == vmi_pagetable_lookup(vmi, swapper_pg_dir - boundary, va)) {
+        if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, swapper_pg_dir - boundary, va, &test) &&
+                test == pa) {
             vmi->kpgd = swapper_pg_dir - boundary;
             return VMI_SUCCESS;
         }
@@ -47,7 +49,8 @@ static status_t linux_filemode_32bit_init(vmi_instance_t vmi,
 
     vmi->page_mode = VMI_PM_PAE;
     if (VMI_SUCCESS == arch_init(vmi)) {
-        if (pa == vmi_pagetable_lookup(vmi, swapper_pg_dir - boundary, va)) {
+        if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, swapper_pg_dir - boundary, va, &test) &&
+                test == pa) {
             vmi->kpgd = swapper_pg_dir - boundary;
             return VMI_SUCCESS;
         }
@@ -55,7 +58,8 @@ static status_t linux_filemode_32bit_init(vmi_instance_t vmi,
 
     vmi->page_mode = VMI_PM_AARCH32;
     if (VMI_SUCCESS == arch_init(vmi)) {
-        if (pa == vmi_pagetable_lookup(vmi, swapper_pg_dir - boundary, va)) {
+        if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, swapper_pg_dir - boundary, va, &test) &&
+                test == pa) {
             vmi->kpgd = swapper_pg_dir - boundary;
             return VMI_SUCCESS;
         }
@@ -70,34 +74,33 @@ static status_t linux_filemode_init(vmi_instance_t vmi)
     addr_t swapper_pg_dir = 0, init_level4_pgt = 0;
     addr_t boundary = 0, phys_start = 0, virt_start = 0;
 
-    switch (vmi->page_mode)
-    {
-    case VMI_PM_AARCH64:
-    case VMI_PM_IA32E:
-        linux_symbol_to_address(vmi, "phys_startup_64", NULL, &phys_start);
-        linux_symbol_to_address(vmi, "startup_64", NULL, &virt_start);
-        break;
-    case VMI_PM_AARCH32:
-    case VMI_PM_LEGACY:
-    case VMI_PM_PAE:
-        linux_symbol_to_address(vmi, "phys_startup_32", NULL, &phys_start);
-        linux_symbol_to_address(vmi, "startup_32", NULL, &virt_start);
-        break;
-    case VMI_PM_UNKNOWN:
-        linux_symbol_to_address(vmi, "phys_startup_64", NULL, &phys_start);
-        linux_symbol_to_address(vmi, "startup_64", NULL, &virt_start);
+    switch (vmi->page_mode) {
+        case VMI_PM_AARCH64:
+        case VMI_PM_IA32E:
+            linux_symbol_to_address(vmi, "phys_startup_64", NULL, &phys_start);
+            linux_symbol_to_address(vmi, "startup_64", NULL, &virt_start);
+            break;
+        case VMI_PM_AARCH32:
+        case VMI_PM_LEGACY:
+        case VMI_PM_PAE:
+            linux_symbol_to_address(vmi, "phys_startup_32", NULL, &phys_start);
+            linux_symbol_to_address(vmi, "startup_32", NULL, &virt_start);
+            break;
+        case VMI_PM_UNKNOWN:
+            linux_symbol_to_address(vmi, "phys_startup_64", NULL, &phys_start);
+            linux_symbol_to_address(vmi, "startup_64", NULL, &virt_start);
 
-        if (phys_start && virt_start) break;
-        phys_start = virt_start = 0;
+            if (phys_start && virt_start) break;
+            phys_start = virt_start = 0;
 
-        linux_symbol_to_address(vmi, "phys_startup_32", NULL, &phys_start);
-        linux_symbol_to_address(vmi, "startup_32", NULL, &virt_start);
-        break;
+            linux_symbol_to_address(vmi, "phys_startup_32", NULL, &phys_start);
+            linux_symbol_to_address(vmi, "startup_32", NULL, &virt_start);
+            break;
     }
 
     virt_start = canonical_addr(virt_start);
 
-    if(phys_start && virt_start && phys_start < virt_start) {
+    if (phys_start && virt_start && phys_start < virt_start) {
         boundary = virt_start - phys_start;
         dbprint(VMI_DEBUG_MISC, "--got kernel boundary (0x%.16"PRIx64").\n", boundary);
     }
@@ -113,12 +116,11 @@ static status_t linux_filemode_init(vmi_instance_t vmi)
 
         /* We don't know if VMI_PM_LEGACY, VMI_PM_PAE or VMI_PM_AARCH32 yet
          * so we do some heuristics below. */
-        if (boundary)
-        {
-        rc = linux_filemode_32bit_init(vmi, swapper_pg_dir, boundary,
-                                       phys_start, virt_start);
-        if (VMI_SUCCESS == rc)
-            return rc;
+        if (boundary) {
+            rc = linux_filemode_32bit_init(vmi, swapper_pg_dir, boundary,
+                                           phys_start, virt_start);
+            if (VMI_SUCCESS == rc)
+                return rc;
         }
 
         /*
@@ -130,8 +132,7 @@ static status_t linux_filemode_init(vmi_instance_t vmi)
                 boundary);
         rc = linux_filemode_32bit_init(vmi, swapper_pg_dir, boundary,
                                        swapper_pg_dir-boundary, swapper_pg_dir);
-        if (VMI_SUCCESS == rc)
-        {
+        if (VMI_SUCCESS == rc) {
             return rc;
         }
 
@@ -140,18 +141,16 @@ static status_t linux_filemode_init(vmi_instance_t vmi)
                 boundary);
         rc = linux_filemode_32bit_init(vmi, swapper_pg_dir, boundary,
                                        swapper_pg_dir-boundary, swapper_pg_dir);
-        if (VMI_SUCCESS == rc)
-        {
-        return rc;
+        if (VMI_SUCCESS == rc) {
+            return rc;
         }
 
         boundary = 0x40000000;
         dbprint(VMI_DEBUG_MISC, "--trying boundary 0x%.16"PRIx64".\n",
-            boundary);
+                boundary);
         rc = linux_filemode_32bit_init(vmi, swapper_pg_dir, boundary,
                                        swapper_pg_dir-boundary, swapper_pg_dir);
-        if (VMI_SUCCESS == rc)
-        {
+        if (VMI_SUCCESS == rc) {
             return rc;
         }
 
@@ -169,7 +168,10 @@ static status_t linux_filemode_init(vmi_instance_t vmi)
         if (boundary) {
             vmi->page_mode = VMI_PM_IA32E;
             if (VMI_SUCCESS == arch_init(vmi)) {
-                if (phys_start == vmi_pagetable_lookup(vmi, init_level4_pgt - boundary, virt_start)) {
+                addr_t test = 0;
+
+                if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, init_level4_pgt - boundary, virt_start, &test) &&
+                        test == phys_start) {
                     vmi->kpgd = init_level4_pgt - boundary;
                     return VMI_SUCCESS;
                 }
@@ -180,37 +182,38 @@ static status_t linux_filemode_init(vmi_instance_t vmi)
     return VMI_FAILURE;
 }
 
-static status_t init_from_rekall_profile(vmi_instance_t vmi) {
+static status_t init_from_rekall_profile(vmi_instance_t vmi)
+{
 
     status_t ret = VMI_FAILURE;
     linux_instance_t linux_instance = vmi->os_data;
 
-    if(!linux_instance->tasks_offset) {
+    if (!linux_instance->tasks_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(linux_instance->rekall_profile, "task_struct", "tasks", &linux_instance->tasks_offset)) {
             goto done;
         }
     }
-    if(!linux_instance->mm_offset) {
+    if (!linux_instance->mm_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(linux_instance->rekall_profile, "task_struct", "mm", &linux_instance->mm_offset)) {
             goto done;
         }
     }
-    if(!linux_instance->pid_offset) {
+    if (!linux_instance->pid_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(linux_instance->rekall_profile, "task_struct", "pid", &linux_instance->pid_offset)) {
             goto done;
         }
     }
-    if(!linux_instance->name_offset) {
+    if (!linux_instance->name_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(linux_instance->rekall_profile, "task_struct", "comm", &linux_instance->name_offset)) {
             goto done;
         }
     }
-    if(!linux_instance->pgd_offset) {
+    if (!linux_instance->pgd_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(linux_instance->rekall_profile, "mm_struct", "pgd", &linux_instance->pgd_offset)) {
             goto done;
         }
     }
-    if(!vmi->init_task) {
+    if (!vmi->init_task) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(linux_instance->rekall_profile, "init_task", NULL, &vmi->init_task)) {
             goto done;
         }
@@ -218,10 +221,12 @@ static status_t init_from_rekall_profile(vmi_instance_t vmi) {
 
     ret = VMI_SUCCESS;
 
-done: return ret;
+done:
+    return ret;
 }
 
-static status_t init_task_kaslr_test(vmi_instance_t vmi, addr_t page_vaddr) {
+static status_t init_task_kaslr_test(vmi_instance_t vmi, addr_t page_vaddr)
+{
     status_t ret = VMI_FAILURE;
     uint32_t pid;
     addr_t init_task = page_vaddr + (vmi->init_task & VMI_BIT_MASK(0,11));
@@ -248,7 +253,26 @@ static status_t init_task_kaslr_test(vmi_instance_t vmi, addr_t page_vaddr) {
     return ret;
 }
 
-status_t init_kaslr(vmi_instance_t vmi) {
+status_t get_kaslr_offset_ia32e(vmi_instance_t vmi)
+{
+    addr_t va, pa;
+    addr_t kernel_text_start = 0xffffffff81000000;
+    addr_t kernel_text_end = kernel_text_start + (1024*1024*1024);
+
+    linux_instance_t linux_instance = vmi->os_data;
+    for (va = kernel_text_start; va < kernel_text_end; va += 0x200000) {
+        if ( vmi_translate_kv2p(vmi, va, &pa) == VMI_SUCCESS ) {
+            linux_instance->kaslr_offset = va - kernel_text_start;
+            vmi->init_task += linux_instance->kaslr_offset;
+            dbprint(VMI_DEBUG_MISC, "**calculated KASLR offset: 0x%"PRIx64"\n", linux_instance->kaslr_offset);
+            return VMI_SUCCESS;
+        }
+    }
+    return VMI_FAILURE;
+}
+
+status_t init_kaslr(vmi_instance_t vmi)
+{
     /*
      * Let's check if we can translate init_task first as is.
      */
@@ -262,6 +286,11 @@ status_t init_kaslr(vmi_instance_t vmi) {
     if ( VMI_SUCCESS == vmi_read_32(vmi, &ctx, &test) )
         return VMI_SUCCESS;
 
+    if ( vmi->page_mode == VMI_PM_IA32E ) {
+        if ( VMI_SUCCESS == get_kaslr_offset_ia32e(vmi) )
+            return VMI_SUCCESS;
+    }
+
     status_t ret = VMI_FAILURE;
     linux_instance_t linux_instance = vmi->os_data;
     GSList *loop, *pages = vmi_get_va_pages(vmi, vmi->kpgd);
@@ -270,7 +299,7 @@ status_t init_kaslr(vmi_instance_t vmi) {
         page_info_t *info = loop->data;
 
         if ( !linux_instance->kaslr_offset ) {
-            switch(vmi->page_mode) {
+            switch (vmi->page_mode) {
                 case VMI_PM_AARCH64:
                 case VMI_PM_IA32E:
                     if ( VMI_GET_BIT(info->vaddr, 47) )
@@ -296,34 +325,39 @@ status_t init_kaslr(vmi_instance_t vmi) {
     return ret;
 }
 
-status_t linux_init(vmi_instance_t vmi) {
+status_t linux_init(vmi_instance_t vmi, GHashTable *config)
+{
 
     status_t rc;
     os_interface_t os_interface = NULL;
 
-    if (vmi->config == NULL) {
+    if (!config) {
         errprint("No config table found\n");
         return VMI_FAILURE;
     }
 
     if (vmi->os_data != NULL) {
         errprint("os data already initialized, reinitializing\n");
-        free(vmi->os_data);
+        g_free(vmi->os_data);
     }
 
-    vmi->os_data = safe_malloc(sizeof(struct linux_instance));
-    bzero(vmi->os_data, sizeof(struct linux_instance));
+    vmi->os_data = g_malloc0(sizeof(struct linux_instance));
+    if ( !vmi->os_data )
+        return VMI_FAILURE;
+
     linux_instance_t linux_instance = vmi->os_data;
 
-    g_hash_table_foreach(vmi->config, (GHFunc)linux_read_config_ghashtable_entries, vmi);
+    g_hash_table_foreach(config, (GHFunc)linux_read_config_ghashtable_entries, vmi);
 
-    if(linux_instance->rekall_profile)
+    if (linux_instance->rekall_profile)
         rc = init_from_rekall_profile(vmi);
-    else
+    else if ( !vmi->init_task )
         rc = linux_symbol_to_address(vmi, "init_task", NULL, &vmi->init_task);
+    else
+        rc = VMI_SUCCESS;
 
-    if (VMI_FAILURE == rc) {
-        errprint("Could not get init_task from Rekall profile or System.map\n");
+    if ( VMI_FAILURE == rc ) {
+        errprint("Failed to determine init_task!\n");
         goto _exit;
     }
 
@@ -351,14 +385,19 @@ status_t linux_init(vmi_instance_t vmi) {
 
     dbprint(VMI_DEBUG_MISC, "**set vmi->kpgd (0x%.16"PRIx64").\n", vmi->kpgd);
 
-    os_interface = safe_malloc(sizeof(struct os_interface));
+    os_interface = g_malloc(sizeof(struct os_interface));
+    if ( !os_interface )
+        goto _exit;
+
     bzero(os_interface, sizeof(struct os_interface));
     os_interface->os_get_offset = linux_get_offset;
+    os_interface->os_get_kernel_struct_offset = linux_get_kernel_struct_offset;
     os_interface->os_pid_to_pgd = linux_pid_to_pgd;
     os_interface->os_pgd_to_pid = linux_pgd_to_pid;
     os_interface->os_ksym2v = linux_symbol_to_address;
     os_interface->os_usym2rva = NULL;
-    os_interface->os_v2sym = linux_system_map_address_to_symbol;
+    os_interface->os_v2sym = NULL;
+    os_interface->os_v2ksym = linux_system_map_address_to_symbol;
     os_interface->os_read_unicode_struct = NULL;
     os_interface->os_teardown = linux_teardown;
 
@@ -366,14 +405,15 @@ status_t linux_init(vmi_instance_t vmi) {
 
     return VMI_SUCCESS;
 
-    _exit:
-    free(vmi->os_data);
+_exit:
+    g_free(vmi->os_data);
     vmi->os_data = NULL;
     return VMI_FAILURE;
 }
 
 void linux_read_config_ghashtable_entries(char* key, gpointer value,
-        vmi_instance_t vmi) {
+        vmi_instance_t vmi)
+{
 
     linux_instance_t linux_instance = vmi->os_data;
 
@@ -412,6 +452,11 @@ void linux_read_config_ghashtable_entries(char* key, gpointer value,
         goto _done;
     }
 
+    if (strncmp(key, "linux_init_task", CONFIG_STR_LENGTH) == 0) {
+        vmi->init_task = *(addr_t*)value;
+        goto _done;
+    }
+
     if (strncmp(key, "ostype", CONFIG_STR_LENGTH) == 0 || strncmp(key, "os_type", CONFIG_STR_LENGTH) == 0) {
         goto _done;
     }
@@ -430,10 +475,18 @@ void linux_read_config_ghashtable_entries(char* key, gpointer value,
 
     warnprint("Invalid offset %s given for Linux target\n", key);
 
-    _done: return;
+_done:
+    return;
 }
 
-uint64_t linux_get_offset(vmi_instance_t vmi, const char* offset_name) {
+status_t linux_get_kernel_struct_offset(vmi_instance_t vmi, const char* symbol, const char* member, addr_t *addr)
+{
+    linux_instance_t linux_instance = vmi->os_data;
+    return rekall_profile_symbol_to_rva(linux_instance->rekall_profile,symbol,member,addr);
+}
+
+status_t linux_get_offset(vmi_instance_t vmi, const char* offset_name, addr_t *offset)
+{
     const size_t max_length = 100;
     linux_instance_t linux_instance = vmi->os_data;
 
@@ -443,22 +496,28 @@ uint64_t linux_get_offset(vmi_instance_t vmi, const char* offset_name) {
     }
 
     if (strncmp(offset_name, "linux_tasks", max_length) == 0) {
-        return linux_instance->tasks_offset;
+        *offset = linux_instance->tasks_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "linux_mm", max_length) == 0) {
-        return linux_instance->mm_offset;
+        *offset = linux_instance->mm_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "linux_pid", max_length) == 0) {
-        return linux_instance->pid_offset;
+        *offset = linux_instance->pid_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "linux_name", max_length) == 0) {
-        return linux_instance->name_offset;
+        *offset = linux_instance->name_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "linux_pgd", max_length) == 0) {
-        return linux_instance->pgd_offset;
-    } else {
-        warnprint("Invalid offset name in linux_get_offset (%s).\n", offset_name);
-        return 0;
+        *offset = linux_instance->pgd_offset;
+        return VMI_SUCCESS;
     }
+
+    warnprint("Invalid offset name in linux_get_offset (%s).\n", offset_name);
+    return VMI_FAILURE;
 }
 
-status_t linux_teardown(vmi_instance_t vmi) {
+status_t linux_teardown(vmi_instance_t vmi)
+{
     linux_instance_t linux_instance = vmi->os_data;
 
     if (vmi->os_data == NULL) {

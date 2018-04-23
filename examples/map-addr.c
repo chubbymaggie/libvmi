@@ -1,5 +1,5 @@
-/* The LibVMI Library is an introspection library that simplifies access to 
- * memory in a target virtual machine or in a file containing a dump of 
+/* The LibVMI Library is an introspection library that simplifies access to
+ * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
  *
  * Copyright 2011 Sandia Corporation. Under the terms of Contract
@@ -52,14 +52,15 @@ main(
     addr_t addr = (addr_t) strtoul(addr_str, NULL, 16);
 
     /* initialize the libvmi library */
-    if (vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, name) ==
-        VMI_FAILURE) {
+    if (VMI_FAILURE ==
+            vmi_init_complete(&vmi, name, VMI_INIT_DOMAINNAME, NULL,
+                              VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL)) {
         printf("Failed to init LibVMI library.\n");
         goto error_exit;
     }
 
     /* get the symbol's memory page */
-    if (PAGE_SIZE != vmi_read_va(vmi, addr, 0, memory, PAGE_SIZE)) {
+    if (VMI_FAILURE == vmi_read_va(vmi, addr, 0, PAGE_SIZE, memory, NULL)) {
         printf("failed to map memory.\n");
         goto error_exit;
     }

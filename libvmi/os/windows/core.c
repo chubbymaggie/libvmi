@@ -35,7 +35,7 @@
 static inline
 win_ver_t ntbuild2version(uint16_t ntbuildnumber)
 {
-    switch(ntbuildnumber) {
+    switch (ntbuildnumber) {
         case 2195:
             return VMI_OS_WINDOWS_2000;
         case 2600:
@@ -63,12 +63,80 @@ win_ver_t ntbuild2version(uint16_t ntbuildnumber)
 };
 
 static inline
-status_t check_pdbase_offset(vmi_instance_t vmi) {
+win_ver_t pe2version(vmi_instance_t vmi, addr_t kernbase_pa)
+{
+    // Examine the PE header to determine the version
+    uint16_t major_os_version = 0;
+    uint16_t minor_os_version = 0;
+    uint16_t optional_header_type = 0;
+    struct optional_header_pe32 *oh32 = NULL;
+    struct optional_header_pe32plus *oh32plus = NULL;
+    uint8_t pe[VMI_PS_4KB];
+    access_context_t ctx = {
+        .translate_mechanism = VMI_TM_NONE,
+        .addr = kernbase_pa
+    };
+
+    if ( VMI_FAILURE == peparse_get_image(vmi, &ctx, VMI_PS_4KB, pe) ) {
+        return VMI_OS_WINDOWS_NONE;
+    }
+
+    peparse_assign_headers(pe, NULL, NULL, &optional_header_type, NULL, &oh32, &oh32plus);
+
+    switch (optional_header_type) {
+        case IMAGE_PE32_MAGIC:
+            major_os_version=oh32->major_os_version;
+            minor_os_version=oh32->minor_os_version;
+            break;
+        case IMAGE_PE32_PLUS_MAGIC:
+            major_os_version=oh32plus->major_os_version;
+            minor_os_version=oh32plus->minor_os_version;
+            break;
+        default:
+            return VMI_OS_WINDOWS_NONE;
+    };
+
+    switch (major_os_version) {
+        case 3:
+        case 4:
+            // This is Windows NT but it is not supported
+            return VMI_OS_WINDOWS_NONE;
+        case 5:
+            switch (minor_os_version) {
+                case 0:
+                    return VMI_OS_WINDOWS_2000;
+                case 1:
+                    return VMI_OS_WINDOWS_XP;
+                case 2:
+                    return VMI_OS_WINDOWS_2003;
+            };
+        case 6:
+            switch (minor_os_version) {
+                case 0:
+                    return VMI_OS_WINDOWS_VISTA;
+                case 1:
+                    return VMI_OS_WINDOWS_7;
+                case 2:
+                    return VMI_OS_WINDOWS_8;
+            };
+        case 10:
+            switch (minor_os_version) {
+                case 0:
+                    return VMI_OS_WINDOWS_10;
+            };
+    };
+
+    return VMI_OS_WINDOWS_NONE;
+}
+
+static inline
+status_t check_pdbase_offset(vmi_instance_t vmi)
+{
     status_t ret = VMI_FAILURE;
     windows_instance_t windows = vmi->os_data;
 
-    if(!windows->pdbase_offset) {
-        if(windows->rekall_profile) {
+    if (!windows->pdbase_offset) {
+        if (windows->rekall_profile) {
             if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_KPROCESS", "DirectoryTableBase", &windows->pdbase_offset)) {
                 goto done;
             }
@@ -80,7 +148,8 @@ status_t check_pdbase_offset(vmi_instance_t vmi) {
 
     ret = VMI_SUCCESS;
 
-    done: return ret;
+done:
+    return ret;
 }
 
 addr_t
@@ -94,10 +163,10 @@ get_ntoskrnl_base(
         .addr = page_paddr
     };
 
-    for(; ctx.addr + VMI_PS_4KB < vmi->max_physical_address; ctx.addr += VMI_PS_4KB) {
+    for (; ctx.addr + VMI_PS_4KB < vmi->max_physical_address; ctx.addr += VMI_PS_4KB) {
 
         uint8_t page[VMI_PS_4KB];
-        if(VMI_FAILURE == peparse_get_image(vmi, &ctx, VMI_PS_4KB, page))
+        if (VMI_FAILURE == peparse_get_image(vmi, &ctx, VMI_PS_4KB, page))
             continue;
 
         struct pe_header *pe_header = NULL;
@@ -110,19 +179,18 @@ get_ntoskrnl_base(
         addr_t export_header_offset =
             peparse_get_idd_rva(IMAGE_DIRECTORY_ENTRY_EXPORT, &optional_header_type, optional_pe_header, NULL, NULL);
 
-        if(!export_header_offset || ctx.addr + export_header_offset >= vmi->max_physical_address)
+        if (!export_header_offset || ctx.addr + export_header_offset >= vmi->max_physical_address)
             continue;
 
-        uint32_t nbytes = vmi_read_pa(vmi, ctx.addr + export_header_offset, &et, sizeof(struct export_table));
-        if(nbytes == sizeof(struct export_table) && !(et.export_flags || !et.name) ) {
-
-            if(ctx.addr + et.name + 12 >= vmi->max_physical_address) {
+        if ( VMI_SUCCESS == vmi_read_pa(vmi, ctx.addr + export_header_offset, sizeof(struct export_table), &et, NULL) ) {
+            if ( !(et.export_flags || !et.name) && ctx.addr + et.name + 12 >= vmi->max_physical_address)
                 continue;
-            }
 
             unsigned char name[13] = {0};
-            vmi_read_pa(vmi, ctx.addr + et.name, name, 12);
-            if(!strcmp("ntoskrnl.exe", (char*)name)) {
+            if ( VMI_FAILURE == vmi_read_pa(vmi, ctx.addr + et.name, 12, name, NULL) )
+                continue;
+
+            if (!strcmp("ntoskrnl.exe", (char*)name)) {
                 ret = ctx.addr;
                 break;
             }
@@ -164,7 +232,9 @@ find_page_mode(
 
     /* As the size of vmi->kpgd is 64-bit, we mask it to be 32-bit here */
     if (VMI_SUCCESS == arch_init(vmi)) {
-        if (windows->ntoskrnl == vmi_pagetable_lookup(vmi, (vmi->kpgd & mask), windows->ntoskrnl_va)) {
+        addr_t test = 0;
+        if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, (vmi->kpgd & mask), windows->ntoskrnl_va, &test) &&
+                test == windows->ntoskrnl) {
             vmi->kpgd &= mask;
             goto found_pm;
         }
@@ -175,7 +245,9 @@ find_page_mode(
 
     /* As the size of vmi->kpgd is 64-bit, we mask it to be only 32-bit here */
     if (VMI_SUCCESS == arch_init(vmi)) {
-        if (windows->ntoskrnl == vmi_pagetable_lookup(vmi, (vmi->kpgd & mask), windows->ntoskrnl_va)) {
+        addr_t test = 0;
+        if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, (vmi->kpgd & mask), windows->ntoskrnl_va, &test) &&
+                test == windows->ntoskrnl) {
             vmi->kpgd &= mask;
             goto found_pm;
         }
@@ -185,17 +257,20 @@ find_page_mode(
     vmi->page_mode = VMI_PM_IA32E;
 
     if (VMI_SUCCESS == arch_init(vmi)) {
-        if (windows->ntoskrnl == vmi_pagetable_lookup(vmi, vmi->kpgd, windows->ntoskrnl_va)) {
+        addr_t test = 0;
+        if ( VMI_SUCCESS == vmi_pagetable_lookup(vmi, vmi->kpgd, windows->ntoskrnl_va, &test) &&
+                test == windows->ntoskrnl) {
             goto found_pm;
         }
     }
 
     goto done;
 
-    found_pm:
-        ret = VMI_SUCCESS;
+found_pm:
+    ret = VMI_SUCCESS;
 
-    done: return ret;
+done:
+    return ret;
 }
 
 /* Tries to find the kernel page directory by doing an exhaustive search
@@ -224,7 +299,7 @@ get_kpgd_method2(
             goto error_exit;
         }
         printf("LibVMI Suggestion: set win_sysproc=0x%"PRIx64" in libvmi.conf for faster startup.\n",
-             sysproc);
+               sysproc);
     }
     dbprint(VMI_DEBUG_MISC, "--got PA to PsInitialSystemProcess (0x%.16"PRIx64").\n",
             sysproc);
@@ -232,10 +307,10 @@ get_kpgd_method2(
     /* Get address for page directory (from system process).
        We are reading 64-bit value here deliberately as we might not know the page mode yet */
     if (VMI_FAILURE ==
-        vmi_read_64_pa(vmi,
-                         sysproc +
-                         windows->pdbase_offset,
-                         &vmi->kpgd)) {
+            vmi_read_64_pa(vmi,
+                           sysproc +
+                           windows->pdbase_offset,
+                           &vmi->kpgd)) {
         dbprint(VMI_DEBUG_MISC, "--failed to resolve PD for System process\n");
         goto error_exit;
     }
@@ -246,9 +321,9 @@ get_kpgd_method2(
     }
 
     if (VMI_FAILURE ==
-        vmi_read_64_pa(vmi,
-                     sysproc + windows->tasks_offset,
-                     &vmi->init_task)) {
+            vmi_read_64_pa(vmi,
+                           sysproc + windows->tasks_offset,
+                           &vmi->init_task)) {
         dbprint(VMI_DEBUG_MISC, "--failed to resolve address of System process\n");
         goto error_exit;
     }
@@ -257,7 +332,7 @@ get_kpgd_method2(
 
     /* If the page mode is already known to be 32-bit we just mask the value here.
        If don't know the page mode yet it will be determined using heuristics in find_page_mode later. */
-    switch(vmi->page_mode) {
+    switch (vmi->page_mode) {
         case VMI_PM_LEGACY:
         case VMI_PM_PAE: {
             uint32_t mask = ~0;
@@ -265,7 +340,8 @@ get_kpgd_method2(
             vmi->init_task &= mask;
             break;
         }
-        default: break;
+        default:
+            break;
     }
 
     dbprint(VMI_DEBUG_MISC, "**set kpgd (0x%.16"PRIx64").\n", vmi->kpgd);
@@ -305,19 +381,22 @@ get_kpgd_method1(
     windows = vmi->os_data;
 
     if (VMI_FAILURE ==
-        vmi_read_addr_ksym(vmi, "PsInitialSystemProcess", &sysproc)) {
+            vmi_read_addr_ksym(vmi, "PsInitialSystemProcess", &sysproc)) {
         dbprint(VMI_DEBUG_MISC, "--failed to read pointer for system process\n");
         goto error_exit;
     }
-    sysproc = vmi_translate_kv2p(vmi, sysproc);
+
+    if (VMI_FAILURE == vmi_translate_kv2p(vmi, sysproc, &sysproc) )
+        goto error_exit;
+
     dbprint(VMI_DEBUG_MISC, "--got PA to PsInitialSystemProcess (0x%.16"PRIx64").\n",
             sysproc);
 
     if (VMI_FAILURE ==
-        vmi_read_addr_pa(vmi,
-                         sysproc +
-                         windows->pdbase_offset,
-                         &vmi->kpgd)) {
+            vmi_read_addr_pa(vmi,
+                             sysproc +
+                             windows->pdbase_offset,
+                             &vmi->kpgd)) {
         dbprint(VMI_DEBUG_MISC, "--failed to resolve pointer for system process\n");
         goto error_exit;
     }
@@ -329,9 +408,9 @@ get_kpgd_method1(
     dbprint(VMI_DEBUG_MISC, "**set kpgd (0x%.16"PRIx64").\n", vmi->kpgd);
 
     if (VMI_FAILURE ==
-        vmi_read_addr_pa(vmi,
-                     sysproc + windows->tasks_offset,
-                     &vmi->init_task)) {
+            vmi_read_addr_pa(vmi,
+                             sysproc + windows->tasks_offset,
+                             &vmi->init_task)) {
         dbprint(VMI_DEBUG_MISC, "--failed to resolve address of System process\n");
         goto error_exit;
     }
@@ -380,9 +459,7 @@ get_kpgd_method0(
 
     sysproc_va -= windows->tasks_offset;
     dbprint(VMI_DEBUG_MISC, "--Found System process at %lx\n", sysproc_va);
-    sysproc_pa = vmi_translate_kv2p(vmi, sysproc_va);
-
-    if (sysproc_pa == 0) {
+    if ( VMI_FAILURE == vmi_translate_kv2p(vmi, sysproc_va, &sysproc_pa) ) {
         dbprint(VMI_DEBUG_MISC, "--failed to translate System process\n");
         goto error_exit;
     }
@@ -390,10 +467,10 @@ get_kpgd_method0(
     dbprint(VMI_DEBUG_MISC, "--Found System process physical address at %lx\n", sysproc_pa);
 
     if (VMI_FAILURE ==
-        vmi_read_addr_pa(vmi,
-                         sysproc_pa +
-                         windows->pdbase_offset,
-                         &kpgd)) {
+            vmi_read_addr_pa(vmi,
+                             sysproc_pa +
+                             windows->pdbase_offset,
+                             &kpgd)) {
         dbprint(VMI_DEBUG_MISC, "--failed to resolve pointer for system process\n");
         goto error_exit;
     }
@@ -414,40 +491,52 @@ error_exit:
     return VMI_FAILURE;
 }
 
-uint64_t windows_get_offset(vmi_instance_t vmi, const char* offset_name) {
+status_t windows_get_kernel_struct_offset(vmi_instance_t vmi, const char* symbol, const char* member, addr_t *addr)
+{
+    windows_instance_t windows = vmi->os_data;
+    return rekall_profile_symbol_to_rva(windows->rekall_profile,symbol,member,addr);
+}
+
+status_t windows_get_offset(vmi_instance_t vmi, const char* offset_name, addr_t *offset)
+{
     const size_t max_length = 100;
     windows_instance_t windows = vmi->os_data;
 
     if (windows == NULL) {
         errprint("VMI_ERROR: OS instance not initialized\n");
-        return 0;
+        return VMI_FAILURE;
     }
 
     if (strncmp(offset_name, "win_tasks", max_length) == 0) {
-        return windows->tasks_offset;
+        *offset = windows->tasks_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "win_pdbase", max_length) == 0) {
-        return windows->pdbase_offset;
+        *offset = windows->pdbase_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "win_pid", max_length) == 0) {
-        return windows->pid_offset;
+        *offset = windows->pid_offset;
+        return VMI_SUCCESS;
     } else if (strncmp(offset_name, "win_pname", max_length) == 0) {
         if (windows->pname_offset == 0) {
-            windows->pname_offset = find_pname_offset(vmi,
-                    NULL );
+            windows->pname_offset = find_pname_offset(vmi, NULL);
             if (windows->pname_offset == 0) {
                 dbprint(VMI_DEBUG_MISC, "--failed to find pname_offset\n");
-                return 0;
+                return VMI_FAILURE;
             }
         }
-        return windows->pname_offset;
-    } else {
-        warnprint("Invalid offset name in windows_get_offset (%s).\n",
-                offset_name);
-        return 0;
+
+        *offset = windows->pname_offset;
+        return VMI_SUCCESS;
     }
+
+    warnprint("Invalid offset name in windows_get_offset (%s).\n",
+              offset_name);
+    return VMI_FAILURE;
 }
 
 void windows_read_config_ghashtable_entries(char* key, gpointer value,
-        vmi_instance_t vmi) {
+        vmi_instance_t vmi)
+{
 
     windows_instance_t windows_instance = vmi->os_data;
 
@@ -526,7 +615,8 @@ void windows_read_config_ghashtable_entries(char* key, gpointer value,
 
     warnprint("Invalid offset \"%s\" given for Windows target\n", key);
 
-    _done: return;
+_done:
+    return;
 }
 
 static status_t
@@ -539,26 +629,29 @@ get_kpgd_from_rekall_profile(vmi_instance_t vmi)
 
     /* The kernel base and the pdbase offset should have already been found
      * and vmi->kpgd should be holding a CR3 value */
-    if( !windows->rekall_profile || !windows->ntoskrnl || !windows->pdbase_offset || !vmi->kpgd )
+    if ( !windows->rekall_profile || !windows->ntoskrnl || !windows->pdbase_offset || !vmi->kpgd )
         return ret;
 
     dbprint(VMI_DEBUG_MISC, "**Getting kernel page directory from Rekall profile\n");
 
-    if ( !windows->sysproc )
-    {
+    if ( !windows->sysproc ) {
         ret = rekall_profile_symbol_to_rva(windows->rekall_profile, "PsInitialSystemProcess", NULL, &sysproc_pointer_rva);
         if ( VMI_FAILURE == ret )
             return ret;
 
-        ret = vmi_read_addr_pa(vmi, windows->ntoskrnl + sysproc_pointer_rva, &windows->sysproc);
+        // try to find _physical_ address of Initial system process pointer
+        if ( VMI_FAILURE == vmi_pagetable_lookup(vmi, vmi->kpgd, windows->ntoskrnl_va + sysproc_pointer_rva, &sysproc_pdbase_addr) )
+            return ret;
+
+        // read _virtual_ address of Initial system process
+        ret = vmi_read_addr_pa(vmi, sysproc_pdbase_addr, &windows->sysproc);
         if ( VMI_FAILURE == ret )
             return ret;
 
         dbprint(VMI_DEBUG_MISC, "**Found PsInitialSystemProcess at 0x%lx\n", windows->sysproc);
     }
 
-    sysproc_pdbase_addr = vmi_pagetable_lookup(vmi, vmi->kpgd, windows->sysproc + windows->pdbase_offset);
-    if ( !sysproc_pdbase_addr )
+    if ( VMI_FAILURE == vmi_pagetable_lookup(vmi, vmi->kpgd, windows->sysproc + windows->pdbase_offset, &sysproc_pdbase_addr) )
         return VMI_FAILURE;
 
     ret = vmi_read_addr_pa(vmi, sysproc_pdbase_addr, &vmi->kpgd);
@@ -569,43 +662,98 @@ get_kpgd_from_rekall_profile(vmi_instance_t vmi)
 }
 
 static status_t
-init_from_rekall_profile(vmi_instance_t vmi)
+init_from_rekall_profile_real(vmi_instance_t vmi, reg_t kpcr_register_to_use)
 {
     status_t ret = VMI_FAILURE;
     windows_instance_t windows = vmi->os_data;
     dbprint(VMI_DEBUG_MISC, "**Trying to init from Rekall profile\n");
 
     reg_t kpcr = 0;
-    addr_t kpcr_rva = 0;
+    addr_t kpcr_rva = 0, int0_rva = 0;
+    reg_t lstar=0, cstar=0;
+    addr_t kisystemcall64shadow=0, kisystemcall32shadow=0;
+    addr_t ntbaseaddress=0, ntbaseaddress_chk=0;
 
-    // try to find the kernel if we are not connecting to a file and the kernel pa/va were not already specified.
-    if(vmi->mode != VMI_FILE && ! ( windows->ntoskrnl && windows->ntoskrnl_va ) ) {
-
-        switch ( vmi->page_mode ) {
-            case VMI_PM_IA32E:
-                if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, GS_BASE, 0))
-                    goto done;
-                break;
-            case VMI_PM_LEGACY: /* Fall-through */
-            case VMI_PM_PAE:
-                if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, FS_BASE, 0))
-                    goto done;
-                break;
-            default:
-                goto done;
-        };
+    if (kpcr_register_to_use) {
+        dbprint(VMI_DEBUG_MISC, "** Trying kpcr_register_to_use to get KPCR.\n");
+        if (VMI_FAILURE == driver_get_vcpureg(vmi, &kpcr, kpcr_register_to_use, 0)) {
+            dbprint(VMI_DEBUG_MISC, "** driver_get_vcpureg(..) failed.\n");
+            goto done;
+        }
 
         if (VMI_SUCCESS == rekall_profile_symbol_to_rva(windows->rekall_profile, "KiInitialPCR", NULL, &kpcr_rva)) {
-            if ( kpcr <= kpcr_rva || (vmi->page_mode == VMI_PM_IA32E && kpcr < 0xffff800000000000) ) {
-                dbprint(VMI_DEBUG_MISC, "**vCPU0 doesn't seem to have KiInitialPCR mapped, can't init from Rekall profile.\n");
+            if ( kpcr < kpcr_rva ) { // Zero offset seems ok. Maybe negative will work too? ;)
+                dbprint(VMI_DEBUG_MISC, "**vCPU0 doesn't seem to have KiInitialPCR mapped, (kpcr < kpcr_rva) (KiInitialPCR) can't init from Rekall profile. Kpcr=0x%" PRIx64 "kpcr_rva=0x%" PRIx64 "\n", kpcr, kpcr_rva);
+                goto done;
+            }
+
+            if (vmi->page_mode == VMI_PM_IA32E && kpcr < 0xffff800000000000) { // We are in 64bit user mode, this is not KPCR
+                dbprint(VMI_DEBUG_MISC, "**Error while init from Rekall profile. Getting KPCR from user mode or just after syscall before 'swapgs'.\n");
+                dbprint(VMI_DEBUG_MISC, "**vCPU0 doesn't seem to have KiInitialPCR mapped, can't init from Rekall profile. Kpcr=0x%" PRIx64 ", kpcr_rva=0x%" PRIx64 "\n", kpcr, kpcr_rva);
                 goto done;
             }
 
             // If the Rekall profile has KiInitialPCR we have Win 7+
             windows->ntoskrnl_va = kpcr - kpcr_rva;
-            windows->ntoskrnl = vmi_translate_kv2p(vmi, windows->ntoskrnl_va);
-        } else if(kpcr == 0x00000000ffdff000) {
-            // If we are in live mode without KiInitialPCR, the KPCR has to be
+            if ( VMI_FAILURE == vmi_translate_kv2p(vmi, windows->ntoskrnl_va, &windows->ntoskrnl) )
+                goto done;
+            //Get kernel base address using cstar/lstar and KiSystemCall32Shadow / KiSystemCall64Shadow
+        } else if ( VMI_SUCCESS == rekall_profile_symbol_to_rva(windows->rekall_profile, "KiSystemCall64Shadow", NULL, &kisystemcall64shadow) ) {
+
+            if (VMI_FAILURE == vmi_get_vcpureg(vmi, &lstar, MSR_LSTAR, 0)) {
+                errprint("Error reading MSR_LSTAR\n");
+                goto done;
+            }
+
+            if (VMI_FAILURE == vmi_get_vcpureg(vmi, &cstar, MSR_CSTAR, 0)) {
+                errprint("Error reading MSR_CSTAR\n");
+                goto done;
+            }
+
+            if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "KiSystemCall32Shadow", NULL, &kisystemcall32shadow)) {
+                errprint("Error retrieving rva of KiSystemCall32Shadow\n");
+                goto done;
+
+            }
+
+            ntbaseaddress = lstar - kisystemcall64shadow;
+            ntbaseaddress_chk = cstar - kisystemcall32shadow;
+
+
+            if (ntbaseaddress != ntbaseaddress_chk) {
+                errprint("Error calculating NT base address\n");
+                goto done;
+            }
+
+
+            windows->ntoskrnl_va = ntbaseaddress;
+
+            if ( VMI_FAILURE == vmi_translate_kv2p(vmi, windows->ntoskrnl_va, &windows->ntoskrnl) )
+                goto done;
+
+        } else if ( VMI_SUCCESS == rekall_profile_symbol_to_rva(windows->rekall_profile, "KiDivideErrorFault", NULL, &int0_rva) ) {
+            reg_t idt = 0;
+            uint32_t int0_high = 0;
+            uint16_t int0_low = 0, int0_middle = 0;
+
+            // Some Windows10+ rekall profiles don't have KiInitialPCR defined so we use the IDT route
+            // For the layout of the IDT entry see http://wiki.osdev.org/Interrupt_Descriptor_Table
+            if (VMI_FAILURE == driver_get_vcpureg(vmi, &idt, IDTR_BASE, 0))
+                goto done;
+            if (VMI_FAILURE == vmi_read_16_va(vmi, idt, 0, &int0_low))
+                goto done;
+            if (VMI_FAILURE == vmi_read_16_va(vmi, idt + 6, 0, &int0_middle))
+                goto done;
+            if (VMI_PM_IA32E == vmi->page_mode && VMI_FAILURE == vmi_read_32_va(vmi, idt + 8, 0, &int0_high))
+                goto done;
+
+            windows->ntoskrnl_va = (((uint64_t)int0_high << 32) | ((uint64_t)int0_middle << 16) | int0_low) - int0_rva;
+            if ( VMI_FAILURE == vmi_translate_kv2p(vmi, windows->ntoskrnl_va, &windows->ntoskrnl) )
+                goto done;
+        }
+
+        if (!windows->ntoskrnl && kpcr == 0x00000000ffdff000) {
+            // If we are in live mode and still don't have the kernel base the KPCR has to be
             // at this VA (XP/Vista) and the KPCR trick [1] is still valid.
             // [1] http://moyix.blogspot.de/2008/04/finding-kernel-global-variables-in.html
             addr_t kdvb = 0, kdvb_offset = 0, kernbase_offset = 0;
@@ -618,11 +766,12 @@ init_from_rekall_profile(vmi_instance_t vmi)
                 goto done;
             if ( VMI_FAILURE == vmi_read_addr_va(vmi, kdvb+kernbase_offset, 0, &windows->ntoskrnl_va) )
                 goto done;
-
-            windows->ntoskrnl = vmi_translate_kv2p(vmi, windows->ntoskrnl_va);
-        } else {
-            goto done;
+            if ( VMI_FAILURE == vmi_translate_kv2p(vmi, windows->ntoskrnl_va, &windows->ntoskrnl) )
+                goto done;
         }
+
+        if ( !windows->ntoskrnl )
+            goto done;
 
         dbprint(VMI_DEBUG_MISC, "**KernBase PA=0x%"PRIx64"\n", windows->ntoskrnl);
 
@@ -630,10 +779,10 @@ init_from_rekall_profile(vmi_instance_t vmi)
          * If the CR3 value points to a pagetable that hasn't been setup yet
          * we need to resort to finding a valid pagetable the old fashioned way.
          */
-        if (windows->ntoskrnl_va && !windows->ntoskrnl)
-        {
+        if (windows->ntoskrnl_va && !windows->ntoskrnl) {
             windows_find_cr3(vmi);
-            windows->ntoskrnl = vmi_translate_kv2p(vmi, windows->ntoskrnl_va);
+            if ( VMI_FAILURE == vmi_translate_kv2p(vmi, windows->ntoskrnl_va, &windows->ntoskrnl) )
+                goto done;
         }
     }
 
@@ -656,12 +805,12 @@ init_from_rekall_profile(vmi_instance_t vmi)
             if ( VMI_FAILURE == vmi_read_addr_pa(vmi, windows->ntoskrnl + kdvb + kernbase_offset, &windows->ntoskrnl_va) )
                 goto done;
 
-            if(!windows->ntoskrnl_va) {
+            if (!windows->ntoskrnl_va) {
                 if ( VMI_FAILURE == vmi_read_32_pa(vmi, windows->ntoskrnl + kdvb + kernbase_offset, (uint32_t*)&windows->ntoskrnl_va) )
                     goto done;
             }
 
-            if(!windows->ntoskrnl_va) {
+            if (!windows->ntoskrnl_va) {
                 dbprint(VMI_DEBUG_MISC, "**failed to find Windows kernel VA via KdVersionBlock\n");
                 goto done;
             }
@@ -684,27 +833,38 @@ init_from_rekall_profile(vmi_instance_t vmi)
         goto done;
     }
 
-    if (ntbuild2version(ntbuildnumber) == VMI_OS_WINDOWS_UNKNOWN) {
-        dbprint(VMI_DEBUG_MISC, "Unknown Windows NtBuildNumber: %u, the Rekall Profile may be incorrect for this Windows!\n", ntbuildnumber);
+    // Let's see if we know the buildnumber
+    windows->version = ntbuild2version(ntbuildnumber);
+
+    if (VMI_OS_WINDOWS_UNKNOWN == windows->version) {
+
+        // Let's check the PE header if the buildnumber is unknown
+        windows->version = pe2version(vmi, windows->ntoskrnl);
+
+        if (VMI_OS_WINDOWS_NONE == windows->version) {
+            dbprint(VMI_DEBUG_MISC, "Failed to find a known version of Windows, "
+                    "the Rekall Profile may be incorrect for this VM or the version of Windows is not supported!\n");
+            goto done;
+        }
     }
 
     // The system map seems to be good, lets grab all the required offsets
-    if(!windows->pdbase_offset) {
+    if (!windows->pdbase_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_KPROCESS", "DirectoryTableBase", &windows->pdbase_offset)) {
             goto done;
         }
     }
-    if(!windows->tasks_offset) {
+    if (!windows->tasks_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "ActiveProcessLinks", &windows->tasks_offset)) {
             goto done;
         }
     }
-    if(!windows->pid_offset) {
+    if (!windows->pid_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "UniqueProcessId", &windows->pid_offset)) {
             goto done;
         }
     }
-    if(!windows->pname_offset) {
+    if (!windows->pname_offset) {
         if (VMI_FAILURE == rekall_profile_symbol_to_rva(windows->rekall_profile, "_EPROCESS", "ImageFileName", &windows->pname_offset)) {
             goto done;
         }
@@ -713,8 +873,72 @@ init_from_rekall_profile(vmi_instance_t vmi)
     ret = VMI_SUCCESS;
     dbprint(VMI_DEBUG_MISC, "**init from Rekall profile success\n");
 
-    done: return ret;
+done:
+    return ret;
 
+}
+
+static status_t
+init_from_rekall_profile(vmi_instance_t vmi)
+{
+    status_t ret = VMI_FAILURE;
+    windows_instance_t windows = vmi->os_data;
+
+    // try to find the kernel if we are not connecting to a file and the kernel pa/va were not already specified.
+    if ( vmi->mode != VMI_FILE && ! ( windows->ntoskrnl && windows->ntoskrnl_va ) ) {
+        switch ( vmi->page_mode ) {
+            case VMI_PM_IA32E: {
+                // MSR_SHADOW_GS_BASE - Model Specific Register (MSR) 0xC0000102 which the kernel initialises with the address of the processor’s KPCR.
+                // (Intel’s label for this MSR is IA32_KERNEL_GS_BASE.)
+                // Actually name seems wrong, since 'shadow' is part of currently loaded GS register that is unreachable for user. It can be and loaded by 'swapgs' instruction.
+                // In case we are in user mode, IA32_KERNEL_GS_BASE handles kernel GS_BASE with KPCR
+                // CS.L bit has no effect on KPCR and its location
+                //
+                // So in 64 bit Windows KPCR must be in MSR register 0xC0000101 ("GS shadow" here named GS_BASE)
+                // or 0xC0000102 ("IA32_KERNEL_GS_BASE" here named MSR_SHADOW_GS_BASE)
+
+                const reg_t kpcr_registers_to_try[]       = {  GS_BASE,   SHADOW_GS,   MSR_SHADOW_GS_BASE,   FS_BASE  };
+#ifdef VMI_DEBUG
+                const char *kpcr_registers_to_try_names[] = { "GS_BASE", "SHADOW_GS", "MSR_SHADOW_GS_BASE", "FS_BASE" };
+#endif
+                dbprint(VMI_DEBUG_MISC, "** (vmi->page_mode == VMI_PM_IA32E) Entering KPCR register selection loop...\n");
+                {
+                    size_t i = 0;
+                    for (i = 0; i < sizeof(kpcr_registers_to_try); ++i) {
+                        dbprint(VMI_DEBUG_MISC, "** (vmi->page_mode == VMI_PM_IA32E) => Using kpcr_register_to_use=%s.\n", kpcr_registers_to_try_names[i]);
+
+                        ret = init_from_rekall_profile_real(vmi, kpcr_registers_to_try[i]);
+                        if ( VMI_FAILURE != ret )
+                            goto done;
+
+                        dbprint(VMI_DEBUG_MISC, "** Trying %s failed.\n", kpcr_registers_to_try_names[i]);
+                    }
+                }
+
+                dbprint(VMI_DEBUG_MISC, "** KPCR register selection loop ended.\n");
+                goto done;
+            }
+
+            case VMI_PM_LEGACY: /* Fall-through */
+            case VMI_PM_PAE:
+                dbprint(VMI_DEBUG_MISC, "** vmi->page_mode in {VMI_PM_LEGACY, VMI_PM_PAE} => Trying FS_BASE.\n");
+                ret = init_from_rekall_profile_real(vmi, FS_BASE);
+                goto done;
+
+            default:
+                dbprint(VMI_DEBUG_MISC, "** vmi->page_mode is unhandled, no KPCR init.\n");
+                goto done;
+        };
+    } else {
+        dbprint(VMI_DEBUG_MISC, "** Not retrieving KPCR via 'switch', setting kpcr_register_to_use to unused = 0 .\n");
+
+        reg_t unused = 0;
+        ret = init_from_rekall_profile_real(vmi, unused);
+        goto done;
+    }
+
+done:
+    return ret;
 }
 
 static status_t
@@ -734,70 +958,74 @@ init_core(vmi_instance_t vmi)
 }
 
 status_t
-windows_init(
-    vmi_instance_t vmi)
+windows_init(vmi_instance_t vmi, GHashTable *config)
 {
     status_t status = VMI_FAILURE;
     windows_instance_t windows = NULL;
     os_interface_t os_interface = NULL;
     status_t real_kpgd_found = VMI_FAILURE;
 
-    if (vmi->config == NULL) {
+    if (!config) {
         errprint("VMI_ERROR: No config table found\n");
         return VMI_FAILURE;
     }
 
     if (vmi->os_data != NULL) {
         errprint("VMI_ERROR: os data already initialized, resetting\n");
+        bzero(vmi->os_data, sizeof(struct windows_instance));
     } else {
-        vmi->os_data = safe_malloc(sizeof(struct windows_instance));
+        vmi->os_data = g_malloc0(sizeof(struct windows_instance));
+        if ( !vmi->os_data )
+            return VMI_FAILURE;
     }
 
-    bzero(vmi->os_data, sizeof(struct windows_instance));
     windows = vmi->os_data;
     windows->version = VMI_OS_WINDOWS_UNKNOWN;
 
-    g_hash_table_foreach(vmi->config, (GHFunc)windows_read_config_ghashtable_entries, vmi);
+    g_hash_table_foreach(config, (GHFunc)windows_read_config_ghashtable_entries, vmi);
 
     /* Need to provide this functions so that find_page_mode will work */
-    os_interface = safe_malloc(sizeof(struct os_interface));
+    os_interface = g_malloc0(sizeof(struct os_interface));
+    if ( !os_interface )
+        goto done;
+
     bzero(os_interface, sizeof(struct os_interface));
+    os_interface->os_get_kernel_struct_offset = windows_get_kernel_struct_offset;
     os_interface->os_get_offset = windows_get_offset;
     os_interface->os_pid_to_pgd = windows_pid_to_pgd;
     os_interface->os_pgd_to_pid = windows_pgd_to_pid;
     os_interface->os_ksym2v = windows_kernel_symbol_to_address;
     os_interface->os_usym2rva = windows_export_to_rva;
     os_interface->os_v2sym = windows_rva_to_export;
+    os_interface->os_v2ksym = NULL;
     os_interface->os_read_unicode_struct = windows_read_unicode_struct;
     os_interface->os_teardown = windows_teardown;
 
     vmi->os_interface = os_interface;
 
-    if(VMI_FAILURE == check_pdbase_offset(vmi)) {
-        goto error_exit;
-    }
+    if (VMI_FAILURE == check_pdbase_offset(vmi))
+        goto done;
 
     /* At this point we still don't have a directory table base,
      * so first we try to get it via the driver (fastest way).
      * If the driver gets us a dtb, it will be used _only_ during the init phase,
      * and will be replaced by the real kpgd later. */
-    if(VMI_FAILURE == driver_get_vcpureg(vmi, &vmi->kpgd, CR3, 0)) {
-        if(VMI_FAILURE == get_kpgd_method2(vmi)) {
+    if (VMI_FAILURE == driver_get_vcpureg(vmi, &vmi->kpgd, CR3, 0)) {
+        if (VMI_FAILURE == get_kpgd_method2(vmi)) {
             errprint("Could not get kpgd, will not be able to determine page mode\n");
-            goto error_exit;
+            goto done;
         } else {
             real_kpgd_found = VMI_SUCCESS;
         }
     }
 
-    if(VMI_FAILURE == init_core(vmi)) {
-        goto error_exit;
-    }
+    if (VMI_FAILURE == init_core(vmi))
+        goto done;
 
     if (VMI_PM_UNKNOWN == vmi->page_mode) {
         if (VMI_FAILURE == find_page_mode(vmi)) {
             errprint("Failed to find correct page mode.\n");
-            goto error_exit;
+            goto done;
         }
     }
 
@@ -832,17 +1060,18 @@ windows_init(
 
     vmi->kpgd = 0;
     errprint("Failed to find kernel page directory.\n");
-    goto error_exit;
 
 done:
-    return status;
+    if ( VMI_FAILURE == status )
+        windows_teardown(vmi);
+    else
+        vmi->x86.transition_pages = true;
 
-error_exit:
-    windows_teardown(vmi);
-    return VMI_FAILURE;
+    return status;
 }
 
-status_t windows_teardown(vmi_instance_t vmi) {
+status_t windows_teardown(vmi_instance_t vmi)
+{
 
     status_t ret = VMI_SUCCESS;
     windows_instance_t windows = vmi->os_data;
@@ -852,8 +1081,7 @@ status_t windows_teardown(vmi_instance_t vmi) {
     }
 
     g_free(windows->rekall_profile);
-
-    free(vmi->os_data);
+    g_free(vmi->os_data);
     vmi->os_data = NULL;
 
 done:

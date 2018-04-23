@@ -42,7 +42,7 @@ main(
     if ( argc != 3 )
         return 1;
 
-    vmi_instance_t vmi;
+    vmi_instance_t vmi = NULL;
     char *filename = NULL;
     FILE *f = NULL;
     unsigned char memory[PAGE_SIZE];
@@ -51,6 +51,7 @@ main(
     memset(zeros, 0, PAGE_SIZE);
     addr_t address = 0;
     addr_t size = 0;
+    vmi_mode_t mode;
 
     /* this is the VM or file that we are looking at */
     char *name = argv[1];
@@ -58,9 +59,11 @@ main(
     /* this is the file name to write the memory image to */
     filename = strndup(argv[2], 50);
 
+    if (VMI_FAILURE == vmi_get_access_mode(vmi, (void*)name, VMI_INIT_DOMAINNAME, NULL, &mode) )
+        goto error_exit;
+
     /* initialize the libvmi library */
-    if (vmi_init(&vmi, VMI_AUTO | VMI_INIT_PARTIAL, name) ==
-        VMI_FAILURE) {
+    if (VMI_FAILURE == vmi_init(&vmi, mode, (void*)name, VMI_INIT_DOMAINNAME, NULL, NULL)) {
         printf("Failed to init LibVMI library.\n");
         goto error_exit;
     }
@@ -76,7 +79,7 @@ main(
     while (address < size) {
 
         /* write memory to file */
-        if (PAGE_SIZE == vmi_read_pa(vmi, address, memory, PAGE_SIZE)) {
+        if (VMI_SUCCESS == vmi_read_pa(vmi, address, PAGE_SIZE, memory, NULL)) {
             /* memory mapped, just write to file */
             size_t written = fwrite(memory, 1, PAGE_SIZE, f);
 
@@ -84,8 +87,7 @@ main(
                 printf("failed to write memory to file.\n");
                 goto error_exit;
             }
-        }
-        else {
+        } else {
             /* memory not mapped, write zeros to maintain offset */
             size_t written = fwrite(zeros, 1, PAGE_SIZE, f);
 
@@ -102,6 +104,8 @@ main(
 error_exit:
     if (f)
         fclose(f);
+
+    free(filename);
 
     /* cleanup any memory associated with the libvmi instance */
     vmi_destroy(vmi);

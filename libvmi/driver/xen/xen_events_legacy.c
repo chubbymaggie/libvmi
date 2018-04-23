@@ -63,53 +63,6 @@
 /*----------------------------------------------------------------------------
  * Helper functions
  */
-static inline xen_events_t *xen_get_events(vmi_instance_t vmi)
-{
-    return xen_get_instance(vmi)->events;
-}
-
-static
-int wait_for_event_or_timeout(xc_evtchn *xce, unsigned long ms)
-{
-    struct pollfd fd = { .fd = xc_evtchn_fd(xce), .events = POLLIN | POLLERR };
-    int port;
-    int rc;
-
-    rc = poll(&fd, 1, ms);
-    if ( rc == -1 )
-    {
-        if (errno == EINTR)
-            return 0;
-
-        errprint("Poll exited with an error\n");
-        goto err;
-    }
-
-    if ( rc == 1 )
-    {
-        port = xc_evtchn_pending(xce);
-        if ( port == -1 )
-        {
-            errprint("Failed to read port from event channel\n");
-            goto err;
-        }
-
-        rc = xc_evtchn_unmask(xce, port);
-        if ( rc != 0 )
-        {
-            errprint("Failed to unmask event channel port\n");
-            goto err;
-        }
-    }
-    else
-        port = -1;
-
-    return port;
-
- err:
-    return -errno;
-}
-
 static inline int get_mem_event_42(xen_mem_event_t *mem_event, mem_event_42_request_t *req)
 {
     mem_event_42_back_ring_t *back_ring;
@@ -184,35 +137,6 @@ static inline int put_mem_response_45(xen_mem_event_t *mem_event, mem_event_45_r
     return 0;
 }
 
-static int resume_domain(vmi_instance_t vmi)
-{
-    xc_interface * xch;
-    xen_events_t * xe;
-    unsigned long dom;
-    int ret;
-
-    // Get xen handle and domain.
-    xch = xen_get_xchandle(vmi);
-    dom = xen_get_domainid(vmi);
-    xe = xen_get_events(vmi);
-
-    if ( !xch ) {
-        errprint("%s error: invalid xc_interface handle\n", __FUNCTION__);
-        return -1;
-    }
-    if ( !xe ) {
-        errprint("%s error: invalid xen_event_t handle\n", __FUNCTION__);
-        return -1;
-    }
-    if ( dom == VMI_INVALID_DOMID ) {
-        errprint("%s error: invalid domid\n", __FUNCTION__);
-        return -1;
-    }
-
-    ret = xc_evtchn_notify(xe->mem_event.xce_handle, xe->mem_event.port);
-    return ret;
-}
-
 static inline void process_response ( event_response_t response, uint32_t *rsp_flags )
 {
     if ( !rsp_flags )
@@ -248,7 +172,7 @@ status_t process_interrupt_event(vmi_instance_t vmi, interrupts_t intr,
         return VMI_FAILURE;
     }
 
-    if(event) {
+    if (event) {
         event->interrupt_event.gfn = gfn;
         event->interrupt_event.offset = offset;
         event->interrupt_event.gla = gla;
@@ -265,84 +189,84 @@ status_t process_interrupt_event(vmi_instance_t vmi, interrupts_t intr,
         process_response ( event->callback(vmi, event), rsp_flags );
         vmi->event_callback = 0;
 
-        if(-1 == event->interrupt_event.reinject) {
+        if (-1 == event->interrupt_event.reinject) {
             errprint("%s Need to specify reinjection behaviour!\n", __FUNCTION__);
             return VMI_FAILURE;
         }
 
-        switch(intr){
-        case INT3:
-            /* Reinject (callback may decide) */
-            if(1 == event->interrupt_event.reinject) {
-                dbprint(VMI_DEBUG_XEN, "rip %"PRIx64" gfn %"PRIx64"\n",
-                    event->interrupt_event.gla, event->interrupt_event.gfn);
+        switch (intr) {
+            case INT3:
+                /* Reinject (callback may decide) */
+                if (1 == event->interrupt_event.reinject) {
+                    dbprint(VMI_DEBUG_XEN, "rip %"PRIx64" gfn %"PRIx64"\n",
+                            event->interrupt_event.gla, event->interrupt_event.gfn);
 
-                /* Undocumented enough to be worth describing at length:
-                 *  If enabled, INT3 events are reported via the mem events
-                 *  facilities of Xen only for the 1-byte 0xCC variant of the
-                 *  instruction. The 2-byte 0xCD imm8 variant taking the
-                 *  interrupt vector as an operand (i.e., 0xCD03) is NOT
-                 *  reported in the same fashion (These details are valid as of
-                 *  Xen 4.3).
-                 *
-                 *  In order for INT3 to be handled correctly by the VM
-                 *  kernel and subsequently passed on to the debugger within a
-                 *  VM, the trap must be re-injected. Because only 0xCC is in
-                 *  play for events, the instruction length involved is only
-                 *  one byte.
-                 */
-                #define TRAP_int3              3
-                rc = xc_hvm_inject_trap(xch, domain_id, vcpu_id,
-                        TRAP_int3,         /* Vector 3 for INT3 */
-                        HVMOP_TRAP_sw_exc, /* Trap type, here a software intr */
-                        ~0u, /* error code. ~0u means 'ignore' */
-                        event->interrupt_event.insn_length,
-                        0   /* cr2 need not be preserved */
-                    );
+                    /* Undocumented enough to be worth describing at length:
+                     *  If enabled, INT3 events are reported via the mem events
+                     *  facilities of Xen only for the 1-byte 0xCC variant of the
+                     *  instruction. The 2-byte 0xCD imm8 variant taking the
+                     *  interrupt vector as an operand (i.e., 0xCD03) is NOT
+                     *  reported in the same fashion (These details are valid as of
+                     *  Xen 4.3).
+                     *
+                     *  In order for INT3 to be handled correctly by the VM
+                     *  kernel and subsequently passed on to the debugger within a
+                     *  VM, the trap must be re-injected. Because only 0xCC is in
+                     *  play for events, the instruction length involved is only
+                     *  one byte.
+                     */
+#define TRAP_int3              3
+                    rc = xen->libxcw.xc_hvm_inject_trap(xch, domain_id, vcpu_id,
+                                                        TRAP_int3,         /* Vector 3 for INT3 */
+                                                        X86_TRAP_sw_exc,   /* Trap type, here a software intr */
+                                                        ~0u, /* error code. ~0u means 'ignore' */
+                                                        event->interrupt_event.insn_length,
+                                                        0   /* cr2 need not be preserved */
+                                                       );
 
-                /* NOTE: Inability to re-inject constitutes a serious error.
-                 *  (E.g., some program like a debugger in the guest is
-                 *  awaiting SIGTRAP in order to trigger to re-write/emulation
-                 *  of the instruction(s) it replaced..without which the
-                 *  debugger's target program may be suspended with little hope
-                 *  of resuming.)
-                 *
-                 * Further, the trap handler in kernel land may
-                 *  itself be placed into an unrecoverable state if extreme
-                 *  caution is not used here.
-                 *
-                 * However, the hypercall (and subsequently the libxc function)
-                 *  return non-zero for Xen 4.1 and 4.2 even for successful
-                 *  actions...so, ignore rc if version < 4.3.
-                 *
-                 * For future reference, this is a failed reinjection, as
-                 * shown via 'xl dmesg' (the domain is forced to crash intentionally by Xen):
-                 *  (XEN) <vm_resume_fail> error code 7
-                 *  (XEN) domain_crash_sync called from vmcs.c:1107
-                 *  (XEN) Domain 449 (vcpu#1) crashed on cpu#0:
-                 *
-                */
-                /*
-                 * Reinjection may return an error code when it actually worked
-                 * NOTE: 4.2.3 has the required patch
-                 *   i.e., 'fix HVMOP_inject_trap return value on success'
-                 * But this cannot be inferred via __XEN_INTERFACE_VERSION__, which is only
-                 *  updated for major versions.
-                 */
-                if ( xen->major_version == 4 && xen->minor_version > 3 && rc < 0) {
-                    errprint("%s : Xen event error %d re-injecting int3\n", __FUNCTION__, rc);
-                    status = VMI_FAILURE;
-                    break;
+                    /* NOTE: Inability to re-inject constitutes a serious error.
+                     *  (E.g., some program like a debugger in the guest is
+                     *  awaiting SIGTRAP in order to trigger to re-write/emulation
+                     *  of the instruction(s) it replaced..without which the
+                     *  debugger's target program may be suspended with little hope
+                     *  of resuming.)
+                     *
+                     * Further, the trap handler in kernel land may
+                     *  itself be placed into an unrecoverable state if extreme
+                     *  caution is not used here.
+                     *
+                     * However, the hypercall (and subsequently the libxc function)
+                     *  return non-zero for Xen 4.1 and 4.2 even for successful
+                     *  actions...so, ignore rc if version < 4.3.
+                     *
+                     * For future reference, this is a failed reinjection, as
+                     * shown via 'xl dmesg' (the domain is forced to crash intentionally by Xen):
+                     *  (XEN) <vm_resume_fail> error code 7
+                     *  (XEN) domain_crash_sync called from vmcs.c:1107
+                     *  (XEN) Domain 449 (vcpu#1) crashed on cpu#0:
+                     *
+                    */
+                    /*
+                     * Reinjection may return an error code when it actually worked
+                     * NOTE: 4.2.3 has the required patch
+                     *   i.e., 'fix HVMOP_inject_trap return value on success'
+                     * But this cannot be inferred via __XEN_INTERFACE_VERSION__, which is only
+                     *  updated for major versions.
+                     */
+                    if ( xen->major_version == 4 && xen->minor_version > 3 && rc < 0) {
+                        errprint("%s : Xen event error %d re-injecting int3\n", __FUNCTION__, rc);
+                        status = VMI_FAILURE;
+                        break;
+                    }
                 }
-            }
 
-            status = VMI_SUCCESS;
+                status = VMI_SUCCESS;
 
-            break;
-        default:
-            errprint("%s : Xen event - unknown interrupt %d\n", __FUNCTION__, intr);
-            status = VMI_FAILURE;
-            break;
+                break;
+            default:
+                errprint("%s : Xen event - unknown interrupt %d\n", __FUNCTION__, intr);
+                status = VMI_FAILURE;
+                break;
         }
     }
 
@@ -351,47 +275,47 @@ status_t process_interrupt_event(vmi_instance_t vmi, interrupts_t intr,
 
 static
 status_t process_register(vmi_instance_t vmi,
-                          registers_t reg, uint64_t gfn, uint32_t vcpu_id, uint64_t gla,
+                          reg_t reg, uint64_t gfn, uint32_t vcpu_id, uint64_t gla,
                           uint32_t *rsp_flags)
 {
     gint lookup         = reg;
     vmi_event_t * event = g_hash_table_lookup(vmi->reg_events, &lookup);
     xen_instance_t *xen = xen_get_instance(vmi);
 
-    if(event) {
-            /* reg_event.equal allows you to set a reg event for
-             *  a specific VALUE of the register (passed in req.gfn)
-             */
-            if(event->reg_event.equal && event->reg_event.equal != gfn)
-                return VMI_SUCCESS;
-
-            event->reg_event.value = gfn;
-            event->vcpu_id = vcpu_id;
-
-            /* Copy CR0/CR3/CR4 old values, available from 4.4 */
-            if(xen->major_version == 4 && xen->minor_version >= 4)
-                switch (event->reg_event.reg) {
-                    case CR0:
-                    case CR3:
-                    case CR4:
-                        event->reg_event.previous = gla;
-                    default:
-                        break;
-                };
-
-            /* Special case: indicate which MSR is being written (passed in gla) */
-            if(xen->major_version == 4 && xen->minor_version > 2 && event->reg_event.reg == MSR_ALL)
-                event->reg_event.context = gla;
-
-            /* TODO MARESCA: note that vmi_event_t lacks a flags member
-             *   so we have no req.flags equivalent. might need to add
-             *   e.g !!(req.flags & MEM_EVENT_FLAG_VCPU_PAUSED)  would be nice
-             */
-            vmi->event_callback = 1;
-            process_response ( event->callback(vmi, event), rsp_flags );
-            vmi->event_callback = 0;
-
+    if (event) {
+        /* reg_event.equal allows you to set a reg event for
+         *  a specific VALUE of the register (passed in req.gfn)
+         */
+        if (event->reg_event.equal && event->reg_event.equal != gfn)
             return VMI_SUCCESS;
+
+        event->reg_event.value = gfn;
+        event->vcpu_id = vcpu_id;
+
+        /* Copy CR0/CR3/CR4 old values, available from 4.4 */
+        if (xen->major_version == 4 && xen->minor_version >= 4)
+            switch (event->reg_event.reg) {
+                case CR0:
+                case CR3:
+                case CR4:
+                    event->reg_event.previous = gla;
+                default:
+                    break;
+            };
+
+        /* Special case: indicate which MSR is being written (passed in gla) */
+        if (xen->major_version == 4 && xen->minor_version > 2 && event->reg_event.reg == MSR_ALL)
+            event->reg_event.msr = gla;
+
+        /* TODO MARESCA: note that vmi_event_t lacks a flags member
+         *   so we have no req.flags equivalent. might need to add
+         *   e.g !!(req.flags & MEM_EVENT_FLAG_VCPU_PAUSED)  would be nice
+         */
+        vmi->event_callback = 1;
+        process_response ( event->callback(vmi, event), rsp_flags );
+        vmi->event_callback = 0;
+
+        return VMI_SUCCESS;
     }
 
     return VMI_FAILURE;
@@ -399,8 +323,8 @@ status_t process_register(vmi_instance_t vmi,
 
 static
 status_t process_mem(vmi_instance_t vmi, bool access_r, bool access_w, bool access_x,
-                     uint64_t gfn, uint64_t offset, uint64_t gla, uint32_t vcpu_id,
-                     uint32_t *rsp_flags)
+                     uint64_t gfn, uint64_t offset, bool gla_valid, uint64_t gla,
+                     uint32_t vcpu_id, uint32_t *rsp_flags)
 {
 
     xc_interface * xch;
@@ -419,15 +343,16 @@ status_t process_mem(vmi_instance_t vmi, bool access_r, bool access_w, bool acce
 
     vmi_event_t *event;
     vmi_mem_access_t out_access = VMI_MEMACCESS_INVALID;
-    if(access_r) out_access |= VMI_MEMACCESS_R;
-    if(access_w) out_access |= VMI_MEMACCESS_W;
-    if(access_x) out_access |= VMI_MEMACCESS_X;
+    if (access_r) out_access |= VMI_MEMACCESS_R;
+    if (access_w) out_access |= VMI_MEMACCESS_W;
+    if (access_x) out_access |= VMI_MEMACCESS_X;
 
     if ( g_hash_table_size(vmi->mem_events_on_gfn) ) {
         event = g_hash_table_lookup(vmi->mem_events_on_gfn, &gfn);
 
         if (event && event->mem_event.in_access & out_access) {
-            event->mem_event.gla = gla;
+            event->mem_event.gla_valid = gla_valid;
+            event->mem_event.gla = gla_valid ? gla : 0ull;
             event->mem_event.gfn = gfn;
             event->mem_event.offset = offset;
             event->mem_event.out_access = out_access;
@@ -448,7 +373,7 @@ status_t process_mem(vmi_instance_t vmi, bool access_r, bool access_w, bool acce
 
         ghashtable_foreach(vmi->mem_events_generic, i, &key, &event) {
             if ( event->mem_event.in_access & out_access ) {
-                event->mem_event.gla = gla;
+                event->mem_event.gla = gla_valid ? gla : ~0ull;
                 event->mem_event.gfn = gfn;
                 event->mem_event.offset = offset;
                 event->mem_event.out_access = out_access;
@@ -495,8 +420,7 @@ status_t process_single_step_event(vmi_instance_t vmi, uint64_t gfn, uint64_t gl
 
     vmi_event_t * event = g_hash_table_lookup(vmi->ss_events, &vcpu_id);
 
-    if (event)
-    {
+    if (event) {
         event->ss_event.gla = gla;
         event->ss_event.gfn = gfn;
         event->vcpu_id = vcpu_id;
@@ -514,6 +438,7 @@ status_t process_single_step_event(vmi_instance_t vmi, uint64_t gfn, uint64_t gl
 
 static status_t xen_set_int3_access(vmi_instance_t vmi, bool enabled)
 {
+    xen_instance_t *xen = xen_get_instance(vmi);
     xc_interface * xch = xen_get_xchandle(vmi);
     unsigned long dom = xen_get_domainid(vmi);
     int param = HVMPME_mode_disabled;
@@ -532,7 +457,7 @@ static status_t xen_set_int3_access(vmi_instance_t vmi, bool enabled)
         param = HVMPME_mode_sync;
     }
 
-    return xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_INT3, param);
+    return xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_INT3, param);
 }
 
 //----------------------------------------------------------------------------
@@ -540,6 +465,7 @@ static status_t xen_set_int3_access(vmi_instance_t vmi, bool enabled)
 
 status_t xen_set_reg_access_legacy(vmi_instance_t vmi, reg_event_t *event)
 {
+    xen_instance_t *xen = xen_get_instance(vmi);
     xc_interface * xch = xen_get_xchandle(vmi);
     unsigned long dom = xen_get_domainid(vmi);
     int value = HVMPME_mode_disabled;
@@ -554,15 +480,16 @@ status_t xen_set_reg_access_legacy(vmi_instance_t vmi, reg_event_t *event)
         return VMI_FAILURE;
     }
 
-    switch(event->in_access){
-        case VMI_REGACCESS_N: break;
+    switch (event->in_access) {
+        case VMI_REGACCESS_N:
+            break;
         case VMI_REGACCESS_W:
             value = HVMPME_mode_sync;
-            if(event->async)
+            if (event->async)
                 value = HVMPME_mode_async;
 
             /* NOTE: this is completely ignored within Xen for MSR events */
-            if(event->onchange)
+            if (event->onchange)
                 value |= HVMPME_onchangeonly;
 
             break;
@@ -576,13 +503,12 @@ status_t xen_set_reg_access_legacy(vmi_instance_t vmi, reg_event_t *event)
             return VMI_FAILURE;
     }
 
-    switch(event->reg){
+    switch (event->reg) {
         case CR0:
-#if XEN_EVENTS_VERSION == 420
             /* More info as to why:
              * http://xenbits.xen.org/gitweb/?p=xen.git;a=commit;h=5d570c1d0274cac3b333ef378af3325b3b69905e */
-            errprint("The majority of events on CR0 are unavailable for Xen 4.2 - 4.4.\n");
-#endif
+            if ( xen->minor_version >=2 && xen->minor_version <= 4 )
+                errprint("The majority of events on CR0 are unavailable for Xen 4.2 - 4.4.\n");
             hvm_param = HVM_PARAM_MEMORY_EVENT_CR0;
             break;
         case CR3:
@@ -600,7 +526,7 @@ status_t xen_set_reg_access_legacy(vmi_instance_t vmi, reg_event_t *event)
             errprint("Tried to register for unsupported register event.\n");
             return VMI_FAILURE;
     }
-    if (xc_set_hvm_param(xch, dom, hvm_param, value))
+    if (xen->libxcw.xc_set_hvm_param(xch, dom, hvm_param, value))
         return VMI_FAILURE;
     return VMI_SUCCESS;
 }
@@ -650,7 +576,7 @@ xen_set_mem_access_legacy(vmi_instance_t vmi, addr_t gpfn,
     dbprint(VMI_DEBUG_XEN, "--Setting memaccess for domain %lu on GPFN: %"PRIu64"\n",
             dom, gpfn);
 
-    if(rc) {
+    if (rc) {
         errprint("xc_hvm_set_mem_access failed with code: %d\n", rc);
         return VMI_FAILURE;
     }
@@ -661,13 +587,13 @@ xen_set_mem_access_legacy(vmi_instance_t vmi, addr_t gpfn,
 status_t xen_set_intr_access_legacy(vmi_instance_t vmi, interrupt_event_t *event, bool enabled)
 {
 
-    switch(event->intr){
-    case INT3:
-        return xen_set_int3_access(vmi, enabled);
-        break;
-    default:
-        errprint("Xen driver does not support enabling events for interrupt: %"PRIu32"\n", event->intr);
-        break;
+    switch (event->intr) {
+        case INT3:
+            return xen_set_int3_access(vmi, enabled);
+            break;
+        default:
+            errprint("Xen driver does not support enabling events for interrupt: %"PRIu32"\n", event->intr);
+            break;
     }
 
     return VMI_FAILURE;
@@ -689,22 +615,23 @@ status_t xen_start_single_step_legacy(vmi_instance_t vmi, single_step_event_t *e
     unsigned long dom = xen_get_domainid(vmi);
     int rc = -1;
     uint32_t i = 0;
+    xen_instance_t *xen = xen_get_instance(vmi);
 
     dbprint(VMI_DEBUG_XEN, "--Starting single step on domain %lu\n", dom);
 
-    rc = xc_set_hvm_param(
-            xen_get_xchandle(vmi), dom,
-            HVM_PARAM_MEMORY_EVENT_SINGLE_STEP, HVMPME_mode_sync);
+    rc = xen->libxcw.xc_set_hvm_param(
+             xen_get_xchandle(vmi), dom,
+             HVM_PARAM_MEMORY_EVENT_SINGLE_STEP, HVMPME_mode_sync);
 
     if (rc<0) {
         errprint("Error %d setting HVM single step\n", rc);
         return VMI_FAILURE;
     }
 
-    for(;i < MAX_SINGLESTEP_VCPUS; i++){
-        if(CHECK_VCPU_SINGLESTEP(*event, i)) {
+    for (; i < MAX_SINGLESTEP_VCPUS; i++) {
+        if (CHECK_VCPU_SINGLESTEP(*event, i)) {
             dbprint(VMI_DEBUG_XEN, "--Setting MTF flag on vcpu %u\n", i);
-            if(xen_set_domain_debug_control(vmi, i, 1) == VMI_FAILURE) {
+            if (xen_set_domain_debug_control(vmi, i, 1) == VMI_FAILURE) {
                 errprint("Error setting MTF flag on vcpu %u\n", i);
                 goto rewind;
             }
@@ -713,28 +640,30 @@ status_t xen_start_single_step_legacy(vmi_instance_t vmi, single_step_event_t *e
 
     return VMI_SUCCESS;
 
- rewind:
+rewind:
     do {
         xen_stop_single_step_legacy(vmi, i);
-    }while(i--);
+    } while (i--);
 
     return VMI_FAILURE;
 }
 
-status_t xen_shutdown_single_step_legacy(vmi_instance_t vmi) {
+status_t xen_shutdown_single_step_legacy(vmi_instance_t vmi)
+{
     unsigned long dom = xen_get_domainid(vmi);
     int rc = -1;
     uint32_t i=0;
+    xen_instance_t *xen =xen_get_instance(vmi);
 
     dbprint(VMI_DEBUG_XEN, "--Shutting down single step on domain %lu\n", dom);
 
-    for(;i<vmi->num_vcpus; i++) {
+    for (; i<vmi->num_vcpus; i++) {
         xen_stop_single_step_legacy(vmi, i);
     }
 
-    rc = xc_set_hvm_param(
-            xen_get_xchandle(vmi), dom,
-            HVM_PARAM_MEMORY_EVENT_SINGLE_STEP, HVMPME_mode_disabled);
+    rc = xen->libxcw.xc_set_hvm_param(
+             xen_get_xchandle(vmi), dom,
+             HVM_PARAM_MEMORY_EVENT_SINGLE_STEP, HVMPME_mode_disabled);
 
     if (rc<0) {
         errprint("Error %d disabling HVM single step\n", rc);
@@ -771,19 +700,15 @@ int xen_are_events_pending_45(vmi_instance_t vmi)
 
 status_t xen_events_listen_42(vmi_instance_t vmi, uint32_t timeout)
 {
-    xc_interface * xch;
-    xen_events_t * xe;
+    xc_interface * xch = xen_get_xchandle(vmi);
+    xen_events_t * xe = xen_get_events(vmi);
+    unsigned long dom = xen_get_domainid(vmi);
+    xen_instance_t *xen = xen_get_instance(vmi);
     mem_event_42_request_t req;
     mem_event_42_response_t rsp;
-    unsigned long dom;
 
     int rc = -1;
     status_t vrc = VMI_SUCCESS;
-
-    // Get xen handle and domain.
-    xch = xen_get_xchandle(vmi);
-    dom = xen_get_domainid(vmi);
-    xe = xen_get_events(vmi);
 
     if ( !xch ) {
         errprint("%s error: invalid xc_interface handle\n", __FUNCTION__);
@@ -798,24 +723,9 @@ status_t xen_events_listen_42(vmi_instance_t vmi, uint32_t timeout)
         return VMI_FAILURE;
     }
 
-    // Set whether the access listener is required
-    rc = xc_domain_set_access_required(xch, dom, vmi->event_listener_required);
-    if ( rc < 0 ) {
-#if XEN_EVENTS_VERSION == 410
-        // FIXME41: Xen 4.1.2 apparently mostly returns -1 for any call to this,
-        // so just suppress the error for now
-        dbprint(VMI_DEBUG_XEN, "Error %d setting mem_access listener required to %d\n",
-            rc, vmi->event_listener_required);
-#else
-        errprint("Error %d setting mem_access listener required to %d\n",
-            rc, vmi->event_listener_required);
-#endif
-    }
-
-    if(!vmi->shutting_down && timeout > 0) {
+    if (!vmi->shutting_down && timeout > 0) {
         dbprint(VMI_DEBUG_XEN, "--Waiting for xen events...(%"PRIu32" ms)\n", timeout);
-        rc = wait_for_event_or_timeout(xe->mem_event.xce_handle, timeout);
-        if ( rc < -1 ) {
+        if ( VMI_FAILURE == wait_for_event_or_timeout(xen, xe->mem_event.xce_handle, timeout) ) {
             errprint("Error while waiting for event.\n");
             return VMI_FAILURE;
         }
@@ -832,14 +742,15 @@ status_t xen_events_listen_42(vmi_instance_t vmi, uint32_t timeout)
         rsp.vcpu_id = req.vcpu_id;
         rsp.flags = req.flags;
 
-        switch(req.reason){
+        switch (req.reason) {
             case MEM_EVENT_REASON_VIOLATION:
                 dbprint(VMI_DEBUG_XEN, "--Caught mem event!\n");
                 rsp.gfn = req.gfn;
 
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_mem(vmi, req.access_r, req.access_w, req.access_x,
-                                      req.gfn, req.offset, req.gla, req.vcpu_id, NULL);
+                                      req.gfn, req.offset, req.gla_valid, req.gla,
+                                      req.vcpu_id, NULL);
                 }
 
                 /*MARESCA do we need logic here to reset flags on a page? see xen-access.c
@@ -850,19 +761,19 @@ status_t xen_events_listen_42(vmi_instance_t vmi, uint32_t timeout)
                 break;
             case MEM_EVENT_REASON_CR0:
                 dbprint(VMI_DEBUG_XEN, "--Caught CR0 event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_register(vmi, CR0, req.gfn, req.gla, req.vcpu_id, NULL);
                 }
                 break;
             case MEM_EVENT_REASON_CR3:
                 dbprint(VMI_DEBUG_XEN, "--Caught CR3 event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_register(vmi, CR3, req.gfn, req.gla, req.vcpu_id, NULL);
                 }
                 break;
 #ifdef HVM_PARAM_MEMORY_EVENT_MSR
             case MEM_EVENT_REASON_MSR:
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     dbprint(VMI_DEBUG_XEN, "--Caught MSR event!\n");
                     vrc = process_register(vmi, MSR_ALL, req.gfn, req.gla, req.vcpu_id, NULL);
                 }
@@ -870,18 +781,18 @@ status_t xen_events_listen_42(vmi_instance_t vmi, uint32_t timeout)
 #endif
             case MEM_EVENT_REASON_CR4:
                 dbprint(VMI_DEBUG_XEN, "--Caught CR4 event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_register(vmi, CR4, req.gfn, req.gla, req.vcpu_id, NULL);
                 }
                 break;
             case MEM_EVENT_REASON_SINGLESTEP:
                 dbprint(VMI_DEBUG_XEN, "--Caught single step event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_single_step_event(vmi, req.gfn, req.gla, req.vcpu_id, NULL);
                 }
                 break;
             case MEM_EVENT_REASON_INT3:
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     dbprint(VMI_DEBUG_XEN, "--Caught int3 interrupt event!\n");
                     vrc = process_interrupt_event(vmi, INT3, req.gfn, req.offset, req.gla, req.vcpu_id, NULL);
                 }
@@ -903,8 +814,8 @@ status_t xen_events_listen_42(vmi_instance_t vmi, uint32_t timeout)
     }
 
     // We only resume the domain once all requests are processed from the ring
-    rc = resume_domain(vmi);
-    if ( rc != 0 ) {
+    rc = xen->libxcw.xc_evtchn_notify(xe->mem_event.xce_handle, xe->mem_event.port);
+    if ( rc ) {
         errprint("Error resuming domain.\n");
         return VMI_FAILURE;
     }
@@ -929,7 +840,7 @@ process_requests_45(vmi_instance_t vmi, mem_event_45_request_t *req, mem_event_4
         rsp->vcpu_id = req->vcpu_id;
         rsp->flags = req->flags;
 
-        switch(req->reason){
+        switch (req->reason) {
             case MEM_EVENT_REASON_VIOLATION:
                 dbprint(VMI_DEBUG_XEN, "--Caught mem event!\n");
                 rsp->gfn = req->gfn;
@@ -943,9 +854,10 @@ process_requests_45(vmi_instance_t vmi, mem_event_45_request_t *req, mem_event_4
                 rsp->access_w = req->access_w;
                 rsp->access_x = req->access_x;
 
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_mem(vmi, req->access_r, req->access_w, req->access_x,
-                                      req->gfn, req->offset, req->gla, req->vcpu_id, &rsp->flags);
+                                      req->gfn, req->offset, req->gla_valid, req->gla,
+                                      req->vcpu_id, &rsp->flags);
                 }
 
                 /*MARESCA do we need logic here to reset flags on a page? see xen-access.c
@@ -956,36 +868,36 @@ process_requests_45(vmi_instance_t vmi, mem_event_45_request_t *req, mem_event_4
                 break;
             case MEM_EVENT_REASON_CR0:
                 dbprint(VMI_DEBUG_XEN, "--Caught CR0 event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_register(vmi, CR0, req->gfn, req->gla, req->vcpu_id, &rsp->flags);
                 }
                 break;
             case MEM_EVENT_REASON_CR3:
                 dbprint(VMI_DEBUG_XEN, "--Caught CR3 event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_register(vmi, CR3, req->gfn, req->gla, req->vcpu_id, &rsp->flags);
                 }
                 break;
             case MEM_EVENT_REASON_MSR:
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     dbprint(VMI_DEBUG_XEN, "--Caught MSR event!\n");
                     vrc = process_register(vmi, MSR_ALL, req->gfn, req->gla, req->vcpu_id, &rsp->flags);
                 }
                 break;
             case MEM_EVENT_REASON_CR4:
                 dbprint(VMI_DEBUG_XEN, "--Caught CR4 event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_register(vmi, CR4, req->gfn, req->gla, req->vcpu_id, &rsp->flags);
                 }
                 break;
             case MEM_EVENT_REASON_SINGLESTEP:
                 dbprint(VMI_DEBUG_XEN, "--Caught single step event!\n");
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     vrc = process_single_step_event(vmi, req->gfn, req->gla, req->vcpu_id, &rsp->flags);
                 }
                 break;
             case MEM_EVENT_REASON_INT3:
-                if(!vmi->shutting_down) {
+                if (!vmi->shutting_down) {
                     dbprint(VMI_DEBUG_XEN, "--Caught int3 interrupt event!\n");
                     vrc = process_interrupt_event(vmi, INT3, req->gfn, req->offset, req->gla, req->vcpu_id, &rsp->flags);
                 }
@@ -1011,19 +923,16 @@ process_requests_45(vmi_instance_t vmi, mem_event_45_request_t *req, mem_event_4
 
 status_t xen_events_listen_45(vmi_instance_t vmi, uint32_t timeout)
 {
-    xc_interface * xch;
-    xen_events_t * xe;
+    xc_interface * xch = xen_get_xchandle(vmi);
+    xen_events_t *xe = xen_get_events(vmi);
+    unsigned long dom = xen_get_domainid(vmi);
+    xen_instance_t *xen = xen_get_instance(vmi);
+
     mem_event_45_request_t req;
     mem_event_45_response_t rsp;
-    unsigned long dom;
 
     int rc = -1;
     status_t vrc = VMI_SUCCESS;
-
-    // Get xen handle and domain.
-    xch = xen_get_xchandle(vmi);
-    dom = xen_get_domainid(vmi);
-    xe = xen_get_events(vmi);
 
     if ( !xch ) {
         errprint("%s error: invalid xc_interface handle\n", __FUNCTION__);
@@ -1038,16 +947,9 @@ status_t xen_events_listen_45(vmi_instance_t vmi, uint32_t timeout)
         return VMI_FAILURE;
     }
 
-    // Set whether the access listener is required
-    rc = xc_domain_set_access_required(xch, dom, vmi->event_listener_required);
-    if ( rc < 0 )
-        errprint("Error %d setting mem_access listener required to %d\n",
-            rc, vmi->event_listener_required);
-
-    if(!vmi->shutting_down && timeout > 0) {
+    if (!vmi->shutting_down && timeout > 0) {
         dbprint(VMI_DEBUG_XEN, "--Waiting for xen events...(%"PRIu32" ms)\n", timeout);
-        rc = wait_for_event_or_timeout(xe->mem_event.xce_handle, timeout);
-        if ( rc < -1 ) {
+        if ( VMI_FAILURE == wait_for_event_or_timeout(xen, xe->mem_event.xce_handle, timeout) ) {
             errprint("Error while waiting for event.\n");
             return VMI_FAILURE;
         }
@@ -1066,14 +968,14 @@ status_t xen_events_listen_45(vmi_instance_t vmi, uint32_t timeout)
         vmi_pause_vm(vmi); // Pause all vCPUs
         vrc = process_requests_45(vmi, &req, &rsp);
 
-        g_hash_table_foreach_remove(vmi->clear_events, clear_events, vmi);
+        g_hash_table_foreach_remove(vmi->clear_events, clear_events_full, vmi);
 
         vmi_resume_vm(vmi);
     }
 
     // We only resume the domain once all requests are processed from the ring
-    rc = resume_domain(vmi);
-    if ( rc != 0 ) {
+    rc = xen->libxcw.xc_evtchn_notify(xe->mem_event.xce_handle, xe->mem_event.port);
+    if ( rc ) {
         errprint("Error resuming domain.\n");
         return VMI_FAILURE;
     }
@@ -1116,22 +1018,22 @@ void xen_events_destroy_legacy(vmi_instance_t vmi)
     /* Unregister for all events */
     if ( xen->major_version == 4 && xen->minor_version < 5 ) {
         /* HVMMEM_* and xc_hvm_set_mem_access was used before 4.5 */
-        rc = xen->libxcw.xc_hvm_set_mem_access(xch, dom, HVMMEM_access_rwx, ~0ull, 0);
-        rc = xen->libxcw.xc_hvm_set_mem_access(xch, dom, HVMMEM_access_rwx, 0, xe->mem_event.max_pages);
+        (void)xen->libxcw.xc_hvm_set_mem_access(xch, dom, HVMMEM_access_rwx, ~0ull, 0);
+        (void)xen->libxcw.xc_hvm_set_mem_access(xch, dom, HVMMEM_access_rwx, 0, xe->mem_event.max_pages);
     } else {
         /* XENMEM_* and xc_set_mem_access are used from 4.5 onwards */
-        rc = xen->libxcw.xc_set_mem_access(xch, dom, XENMEM_access_rwx, ~0ull, 0);
-        rc = xen->libxcw.xc_set_mem_access(xch, dom, XENMEM_access_rwx, 0, xe->mem_event.max_pages);
+        (void)xen->libxcw.xc_set_mem_access(xch, dom, XENMEM_access_rwx, ~0ull, 0);
+        (void)xen->libxcw.xc_set_mem_access(xch, dom, XENMEM_access_rwx, 0, xe->mem_event.max_pages);
     }
-    rc = xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_INT3, HVMPME_mode_disabled);
-    rc = xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_CR0, HVMPME_mode_disabled);
-    rc = xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_CR3, HVMPME_mode_disabled);
-    rc = xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_CR4, HVMPME_mode_disabled);
-    rc = xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_SINGLE_STEP, HVMPME_mode_disabled);
+    (void)xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_INT3, HVMPME_mode_disabled);
+    (void)xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_CR0, HVMPME_mode_disabled);
+    (void)xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_CR3, HVMPME_mode_disabled);
+    (void)xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_CR4, HVMPME_mode_disabled);
+    (void)xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_SINGLE_STEP, HVMPME_mode_disabled);
 
     /* MSR events got introduced in 4.2 */
     if ( xen->major_version == 4 && xen->minor_version > 2 )
-        rc = xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_MSR, HVMPME_mode_disabled);
+        (void)xen->libxcw.xc_set_hvm_param(xch, dom, HVM_PARAM_MEMORY_EVENT_MSR, HVMPME_mode_disabled);
 
     if ( xen->major_version == 4 && xen->minor_version < 5 )
         xen_events_listen_42(vmi, 0);
@@ -1142,8 +1044,7 @@ void xen_events_destroy_legacy(vmi_instance_t vmi)
     munmap(xe->mem_event.ring_page, getpagesize());
     rc = xen->libxcw.xc_mem_access_disable(xch, dom);
 
-    if ( rc != 0 )
-    {
+    if ( rc != 0 ) {
         errprint("Error disabling mem events.\n");
     }
 
@@ -1151,17 +1052,15 @@ void xen_events_destroy_legacy(vmi_instance_t vmi)
      * for when this function is called before it was bound
      */
     // Unbind VIRQ
-    rc = xc_evtchn_unbind(xe->mem_event.xce_handle, xe->mem_event.port);
-    if ( rc != 0 )
-    {
+    rc = xen->libxcw.xc_evtchn_unbind(xe->mem_event.xce_handle, xe->mem_event.port);
+    if ( rc != 0 ) {
         errprint("Error unbinding event port\n");
     }
     //xe->mem_event.port = -1;
 
     // Close event channel
-    rc = xc_evtchn_close(xe->mem_event.xce_handle);
-    if ( rc != 0 )
-    {
+    rc = xen->libxcw.xc_evtchn_close(xe->mem_event.xce_handle);
+    if ( rc != 0 ) {
         errprint("Error closing event channel\n");
     }
     //xe->mem_event.xce_handle = NULL;
@@ -1172,7 +1071,10 @@ void xen_events_destroy_legacy(vmi_instance_t vmi)
     vmi_resume_vm(vmi);
 }
 
-status_t xen_init_events_legacy(vmi_instance_t vmi)
+status_t xen_init_events_legacy(
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data)
 {
     xen_events_t * xe = NULL;
     xc_interface * xch = NULL;
@@ -1187,7 +1089,7 @@ status_t xen_init_events_legacy(vmi_instance_t vmi)
      *  This is likely to expand to PV in the future, but
      *  until such time, enforce this restriction
      */
-    if(!xen->hvm){
+    if (vmi->vm_type != HVM) {
         errprint("Xen events: only HVM domains are supported.\n");
         return VMI_FAILURE;
     }
@@ -1235,15 +1137,13 @@ status_t xen_init_events_legacy(vmi_instance_t vmi)
 
     dbprint(VMI_DEBUG_XEN, "Init xen events with xch == %llx\n", (unsigned long long)xch);
 
-    rc = xc_domain_getinfolist(xch, dom, 1, &dom_info);
-    if ( rc != 1 )
-    {
+    rc = xen->libxcw.xc_domain_getinfolist(xch, dom, 1, &dom_info);
+    if ( rc != 1 ) {
         errprint("Error getting domain info\n");
         goto err;
     }
 
-    if(!(dom_info.flags & XEN_DOMINF_paused) && VMI_FAILURE == vmi_pause_vm(vmi))
-    {
+    if (!(dom_info.flags & XEN_DOMINF_paused) && VMI_FAILURE == vmi_pause_vm(vmi)) {
         errprint("Failed to pause VM\n");
         goto err;
     }
@@ -1260,18 +1160,16 @@ status_t xen_init_events_legacy(vmi_instance_t vmi)
         /* Xen 4.2-4.4 initialization */
 
         // Initialise shared page
-        xc_get_hvm_param(xch, dom, HVM_PARAM_ACCESS_RING_PFN, &ring_pfn);
+        xen->libxcw.xc_get_hvm_param(xch, dom, HVM_PARAM_ACCESS_RING_PFN, &ring_pfn);
         mmap_pfn = ring_pfn;
         xe->mem_event.ring_page =
             xen->libxcw.xc_map_foreign_batch(xch, dom, PROT_READ | PROT_WRITE, &mmap_pfn, 1);
-        if ( mmap_pfn & XEN_DOMCTL_PFINFO_XTAB )
-        {
+        if ( mmap_pfn & XEN_DOMCTL_PFINFO_XTAB ) {
             /* Map failed, populate ring page */
-            rc = xc_domain_populate_physmap_exact(xch,
-                                                  dom,
-                                                  1, 0, 0, &ring_pfn);
-            if ( rc != 0 )
-            {
+            rc = xen->libxcw.xc_domain_populate_physmap_exact(xch,
+                    dom,
+                    1, 0, 0, &ring_pfn);
+            if ( rc != 0 ) {
                 errprint("Failed to populate ring gfn\n");
                 goto err;
             }
@@ -1279,9 +1177,8 @@ status_t xen_init_events_legacy(vmi_instance_t vmi)
             mmap_pfn = ring_pfn;
             xe->mem_event.ring_page =
                 xen->libxcw.xc_map_foreign_batch(xch, dom,
-                                     PROT_READ | PROT_WRITE, &mmap_pfn, 1);
-            if ( mmap_pfn & XEN_DOMCTL_PFINFO_XTAB )
-            {
+                                                 PROT_READ | PROT_WRITE, &mmap_pfn, 1);
+            if ( mmap_pfn & XEN_DOMCTL_PFINFO_XTAB ) {
                 errprint("Could not map the ring page\n");
                 goto err;
             }
@@ -1300,7 +1197,7 @@ reinit_42:
 enable_45:
         /* Enable mem access and map the ring page */
         xe->mem_event.ring_page =
-                xen->libxcw.xc_mem_access_enable2(xch, dom, &(xe->mem_event.evtchn_port));
+            xen->libxcw.xc_mem_access_enable2(xch, dom, &(xe->mem_event.evtchn_port));
 
         rc = xe->mem_event.ring_page ? 0 : 1;
         goto enable_done;
@@ -1311,12 +1208,11 @@ reinit_45:
     }
 
 enable_done:
-    if ( rc != 0 )
-    {
+    if ( rc != 0 ) {
         switch ( errno ) {
             case EBUSY:
                 errprint("events are (or were) active on this domain\n");
-                if(!tries) {
+                if (!tries) {
                     errprint("trying to disable and re-enable events\n");
                     tries++;
 
@@ -1341,24 +1237,25 @@ enable_done:
 
     /* Now that the ring is set, remove it from the guest's physmap */
     if ( xen->major_version == 4 && xen->minor_version > 1 && xen->minor_version < 5 &&
-         xc_domain_decrease_reservation_exact(xch, dom, 1, 0, &ring_pfn) )
-    {
+            xen->libxcw.xc_domain_decrease_reservation_exact(xch, dom, 1, 0, &ring_pfn) ) {
         errprint("Failed to remove ring from guest physmap\n");
         goto err;
     }
 
-    // Open event channel
-    xe->mem_event.xce_handle = xc_evtchn_open(NULL, 0);
-    if ( xe->mem_event.xce_handle == NULL )
-    {
-        errprint("Failed to open event channel\n");
-        goto err;
+    if ( init_flags & VMI_INIT_XEN_EVTCHN )
+        xe->mem_event.xce_handle = init_data;
+    else {
+        /* Open event channel */
+        xe->mem_event.xce_handle = xen->libxcw.xc_evtchn_open(NULL, 0);
+        if ( !xe->vm_event.xce_handle ) {
+            errprint("Failed to open event channel\n");
+            goto err;
+        }
     }
 
     // Bind event notification
-    rc = xc_evtchn_bind_interdomain(xe->mem_event.xce_handle, dom, xe->mem_event.evtchn_port);
-    if ( rc < 0 )
-    {
+    rc = xen->libxcw.xc_evtchn_bind_interdomain(xe->mem_event.xce_handle, dom, xe->mem_event.evtchn_port);
+    if ( rc < 0 ) {
         errprint("Failed to bind event channel\n");
         goto err;
     }
@@ -1379,18 +1276,16 @@ enable_done:
                        getpagesize());
     }
 
-    if(!(dom_info.flags & XEN_DOMINF_paused))
-    {
+    if (!(dom_info.flags & XEN_DOMINF_paused)) {
         vmi_resume_vm(vmi);
     }
     return VMI_SUCCESS;
 
- err:
+err:
     errprint("Failed initialize xen events.\n");
     xen_events_destroy_legacy(vmi);
 
-    if(!(dom_info.flags & XEN_DOMINF_paused))
-    {
+    if (!(dom_info.flags & XEN_DOMINF_paused)) {
         vmi_resume_vm(vmi);
     }
     return VMI_FAILURE;

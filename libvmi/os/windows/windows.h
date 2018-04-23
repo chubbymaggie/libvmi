@@ -51,17 +51,21 @@ struct windows_instance {
 };
 typedef struct windows_instance *windows_instance_t;
 
-status_t windows_init(vmi_instance_t instance);
+status_t windows_init(vmi_instance_t instance, GHashTable *config);
 
-addr_t windows_pid_to_pgd(vmi_instance_t vmi, vmi_pid_t pid);
-vmi_pid_t windows_pgd_to_pid(vmi_instance_t vmi, addr_t pgd);
+status_t windows_pid_to_pgd(vmi_instance_t vmi, vmi_pid_t pid, addr_t *dtb);
+status_t windows_pgd_to_pid(vmi_instance_t vmi, addr_t pgd, vmi_pid_t *pid);
 
 status_t
 windows_kernel_symbol_to_address(vmi_instance_t vmi, const char *symbol,
-        addr_t *kernel_base_address, addr_t *address);
+                                 addr_t *kernel_base_address, addr_t *address);
+
+status_t windows_get_kernel_struct_offset(vmi_instance_t vmi,
+        const char*  symbol, const char* member, addr_t *addr);
+
 status_t
 windows_export_to_rva(vmi_instance_t vmi, const access_context_t *ctx,
-        const char *symbol, addr_t *rva);
+                      const char *symbol, addr_t *rva);
 char*
 windows_rva_to_export(vmi_instance_t vmi, addr_t rva, const access_context_t *ctx);
 

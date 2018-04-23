@@ -1,5 +1,5 @@
-/* The LibVMI Library is an introspection library that simplifies access to 
- * memory in a target virtual machine or in a file containing a dump of 
+/* The LibVMI Library is an introspection library that simplifies access to
+ * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
  *
  * Copyright 2011 Sandia Corporation. Under the terms of Contract
@@ -47,8 +47,9 @@ main(
     char *name = argv[1];
 
     /* initialize the libvmi library */
-    if (vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, name) ==
-        VMI_FAILURE) {
+    if (VMI_FAILURE ==
+            vmi_init_complete(&vmi, name, VMI_INIT_DOMAINNAME, NULL,
+                              VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL)) {
         printf("Failed to init LibVMI library.\n");
         return 1;
     }
@@ -56,16 +57,15 @@ main(
     /* pause the vm for consistent memory access */
     vmi_pause_vm(vmi);
 
-    switch(vmi_get_ostype(vmi))
-    {
-    case VMI_OS_LINUX:
-        vmi_read_addr_ksym(vmi, "modules", &next_module);
-        break;
-    case VMI_OS_WINDOWS:
-        vmi_read_addr_ksym(vmi, "PsLoadedModuleList", &next_module);
-        break;
-    default:
-        goto error_exit;
+    switch (vmi_get_ostype(vmi)) {
+        case VMI_OS_LINUX:
+            vmi_read_addr_ksym(vmi, "modules", &next_module);
+            break;
+        case VMI_OS_WINDOWS:
+            vmi_read_addr_ksym(vmi, "PsLoadedModuleList", &next_module);
+            break;
+        default:
+            goto error_exit;
     }
 
     list_head = next_module;
@@ -92,16 +92,14 @@ main(
         if (VMI_OS_LINUX == vmi_get_ostype(vmi)) {
             char *modname = NULL;
 
-            if (VMI_PM_IA32E == vmi_get_page_mode(vmi)) {   // 64-bit paging
+            if (VMI_PM_IA32E == vmi_get_page_mode(vmi, 0)) {   // 64-bit paging
                 modname = vmi_read_str_va(vmi, next_module + 16, 0);
-            }
-            else {
+            } else {
                 modname = vmi_read_str_va(vmi, next_module + 8, 0);
             }
             printf("%s\n", modname);
             free(modname);
-        }
-        else if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)) {
+        } else if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)) {
 
             unicode_string_t *us = NULL;
 
@@ -111,7 +109,7 @@ main(
              * These offset values are stable (at least) between XP and Windows 7.
              */
 
-            if (VMI_PM_IA32E == vmi_get_page_mode(vmi)) {
+            if (VMI_PM_IA32E == vmi_get_page_mode(vmi, 0)) {
                 us = vmi_read_unicode_str_va(vmi, next_module + 0x58, 0);
             } else {
                 us = vmi_read_unicode_str_va(vmi, next_module + 0x2c, 0);
@@ -120,10 +118,10 @@ main(
             unicode_string_t out = { 0 };
             //         both of these work
             if (us &&
-                VMI_SUCCESS == vmi_convert_str_encoding(us, &out,
-                                                        "UTF-8")) {
+                    VMI_SUCCESS == vmi_convert_str_encoding(us, &out,
+                            "UTF-8")) {
                 printf("%s\n", out.contents);
-                //            if (us && 
+                //            if (us &&
                 //                VMI_SUCCESS == vmi_convert_string_encoding (us, &out, "WCHAR_T")) {
                 //                printf ("%ls\n", out.contents);
                 free(out.contents);

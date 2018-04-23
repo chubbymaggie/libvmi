@@ -24,9 +24,13 @@
 #define FILE_DRIVER_H
 
 status_t file_init(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 status_t file_init_vmi(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 void file_destroy(
     vmi_instance_t vmi);
 status_t file_get_name(
@@ -41,8 +45,8 @@ status_t file_get_memsize(
     addr_t *maximum_physical_address);
 status_t file_get_vcpureg(
     vmi_instance_t vmi,
-    reg_t *value,
-    registers_t reg,
+    uint64_t *value,
+    reg_t reg,
     unsigned long vcpu);
 void *file_read_page(
     vmi_instance_t vmi,
@@ -56,7 +60,9 @@ int file_is_pv(
     vmi_instance_t vmi);
 status_t file_test(
     uint64_t id,
-    const char *name);
+    const char *name,
+    uint64_t init_flags,
+    void* init_data);
 status_t file_pause_vm(
     vmi_instance_t vmi);
 status_t file_resume_vm(

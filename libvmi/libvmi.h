@@ -47,35 +47,33 @@ extern "C" {
 #include <errno.h>
 #include <string.h>
 
-typedef uint32_t vmi_mode_t;
+#define VMI_INIT_DOMAINNAME (1u << 0) /**< initialize using domain name */
 
-/* These will be used in conjuction with vmi_mode_t variables */
+#define VMI_INIT_DOMAINID (1u << 1) /**< initialize using domain id */
 
-#define VMI_AUTO (1 << 0)  /**< libvmi should detect what to monitor or view */
+#define VMI_INIT_EVENTS (1u << 2) /**< initialize events */
 
-#define VMI_XEN  (1 << 1)  /**< libvmi is monitoring a Xen VM */
+#define VMI_INIT_SHM (1u << 3) /**< initialize SHM mode */
 
-#define VMI_KVM  (1 << 2)  /**< libvmi is monitoring a KVM VM */
+#define VMI_INIT_XEN_EVTCHN (1u << 4) /**< use provided Xen file descriptor */
 
-#define VMI_FILE (1 << 3)  /**< libvmi is viewing a file on disk */
+typedef enum vmi_mode {
 
-#define VMI_INIT_PARTIAL  (1 << 16) /**< init enough to view physical addresses */
+    VMI_XEN, /**< libvmi is monitoring a Xen VM */
 
-#define VMI_INIT_COMPLETE (1 << 17) /**< full initialization */
+    VMI_KVM, /**< libvmi is monitoring a KVM VM */
 
-#define VMI_INIT_EVENTS (1 << 18) /**< init support for VM events */
+    VMI_FILE, /**< libvmi is viewing a file on disk */
+} vmi_mode_t;
 
-#define VMI_INIT_SHM_SNAPSHOT (1 << 19) /**< setup shm-snapshot in vmi_init() if the feature is activated */
+typedef enum vmi_config {
 
-#define VMI_CONFIG_NONE (1 << 24) /**< no config provided */
+    VMI_CONFIG_GLOBAL_FILE_ENTRY, /**< config in file provided */
 
-#define VMI_CONFIG_GLOBAL_FILE_ENTRY (1 << 25) /**< config in file provided */
+    VMI_CONFIG_STRING,            /**< config string provided */
 
-#define VMI_CONFIG_STRING (1 << 26) /**< config string provided */
-
-#define VMI_CONFIG_GHASHTABLE (1 << 27) /**< config GHashTable provided */
-
-#define VMI_INVALID_DOMID ~0ULL /**< invalid domain id */
+    VMI_CONFIG_GHASHTABLE,        /**< config GHashTable provided */
+} vmi_config_t;
 
 typedef enum status {
 
@@ -84,13 +82,38 @@ typedef enum status {
     VMI_FAILURE   /**< return value indicating failure */
 } status_t;
 
+typedef enum vmi_init_error {
+
+    VMI_INIT_ERROR_NONE, /**< No error */
+
+    VMI_INIT_ERROR_DRIVER_NOT_DETECTED, /**< Failed to auto-detect hypervisor */
+
+    VMI_INIT_ERROR_DRIVER, /**< Failed to initialize hypervisor-driver */
+
+    VMI_INIT_ERROR_VM_NOT_FOUND, /**< Failed to find the specified VM */
+
+    VMI_INIT_ERROR_PAGING, /**< Failed to determine or initialize paging functions */
+
+    VMI_INIT_ERROR_OS, /**< Failed to determine or initialize OS functions */
+
+    VMI_INIT_ERROR_EVENTS, /**< Failed to initialize events */
+
+    VMI_INIT_ERROR_SHM, /**< Failed to initialize SHM */
+
+    VMI_INIT_ERROR_NO_CONFIG, /**< No configuration was found for OS initialization */
+
+    VMI_INIT_ERROR_NO_CONFIG_ENTRY, /**< Configuration contained no valid entry for VM */
+} vmi_init_error_t;
+
 typedef enum os {
 
     VMI_OS_UNKNOWN,  /**< OS type is unknown */
 
     VMI_OS_LINUX,    /**< OS type is Linux */
 
-    VMI_OS_WINDOWS   /**< OS type is Windows */
+    VMI_OS_WINDOWS,  /**< OS type is Windows */
+
+    VMI_OS_FREEBSD   /**< OS type is FreeBSD */
 } os_t;
 
 /**
@@ -129,6 +152,12 @@ typedef enum page_mode {
     VMI_PM_AARCH64  /**< ARM 64-bit paging */
 } page_mode_t;
 
+/**
+ * Allow the use of transition-pages when checking PTE.present bit. This is
+ * a Windows-specific paging feature.
+ */
+#define VMI_PM_INITFLAG_TRANSITION_PAGES (1u << 0)
+
 typedef enum page_size {
 
     VMI_PS_UNKNOWN  = 0ULL,         /**< page size unknown */
@@ -157,8 +186,9 @@ typedef enum page_size {
 
 } page_size_t;
 
+#define VMI_INVALID_DOMID ~0ULL /**< invalid domain id */
+
 typedef uint64_t reg_t;
-typedef reg_t registers_t;
 
 /**
  * The following definitions are used where the API defines
@@ -265,6 +295,46 @@ typedef reg_t registers_t;
 #define MSR_SYSCALL_MASK 73
 #define MSR_EFER         74
 #define MSR_TSC_AUX      75
+
+#define MSR_STAR                    119
+#define MSR_SHADOW_GS_BASE          120
+#define MSR_MTRRfix64K_00000        121
+#define MSR_MTRRfix16K_80000        122
+#define MSR_MTRRfix16K_A0000        123
+#define MSR_MTRRfix4K_C0000         124
+#define MSR_MTRRfix4K_C8000         125
+#define MSR_MTRRfix4K_D0000         126
+#define MSR_MTRRfix4K_D8000         127
+#define MSR_MTRRfix4K_E0000         128
+#define MSR_MTRRfix4K_E8000         129
+#define MSR_MTRRfix4K_F0000         130
+#define MSR_MTRRfix4K_F8000         131
+#define MSR_MTRRdefType             132
+#define MSR_IA32_MC0_CTL            133
+#define MSR_IA32_MC0_STATUS         134
+#define MSR_IA32_MC0_ADDR           135
+#define MSR_IA32_MC0_MISC           136
+#define MSR_IA32_MC1_CTL            137
+#define MSR_IA32_MC0_CTL2           138
+#define MSR_AMD_PATCHLEVEL          139
+#define MSR_AMD64_TSC_RATIO         140
+#define MSR_IA32_P5_MC_ADDR         141
+#define MSR_IA32_P5_MC_TYPE         142
+#define MSR_IA32_TSC                143
+#define MSR_IA32_PLATFORM_ID        144
+#define MSR_IA32_EBL_CR_POWERON     145
+#define MSR_IA32_EBC_FREQUENCY_ID   146
+#define MSR_IA32_FEATURE_CONTROL    147
+#define MSR_IA32_SYSENTER_CS        148
+#define MSR_IA32_SYSENTER_ESP       149
+#define MSR_IA32_SYSENTER_EIP       150
+#define MSR_IA32_MISC_ENABLE        151
+#define MSR_HYPERVISOR              152
+
+/**
+ * Special generic case for specifying arbitrary MSRs not formally listed above.
+ */
+#define MSR_UNDEFINED               153
 
 /**
  * Special generic case for handling MSRs, given their understandably
@@ -376,6 +446,61 @@ typedef reg_t registers_t;
 #define SPSR_EL1    SPSR_SVC
 #define TCR_EL1     TTBCR
 
+/*
+ * Commonly used x86 registers
+ */
+typedef struct x86_regs {
+    uint64_t rax;
+    uint64_t rcx;
+    uint64_t rdx;
+    uint64_t rbx;
+    uint64_t rsp;
+    uint64_t rbp;
+    uint64_t rsi;
+    uint64_t rdi;
+    uint64_t r8;
+    uint64_t r9;
+    uint64_t r10;
+    uint64_t r11;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
+    uint64_t rflags;
+    uint64_t dr7;
+    uint64_t rip;
+    uint64_t cr0;
+    uint64_t cr2;
+    uint64_t cr3;
+    uint64_t cr4;
+    uint64_t sysenter_cs;
+    uint64_t sysenter_esp;
+    uint64_t sysenter_eip;
+    uint64_t msr_efer;
+    uint64_t msr_star;
+    uint64_t msr_lstar;
+    uint64_t fs_base;
+    uint64_t gs_base;
+    uint32_t cs_arbytes;
+    uint32_t _pad;
+} x86_registers_t;
+
+typedef struct arm_registers {
+    uint64_t ttbr0;
+    uint64_t ttbr1;
+    uint64_t ttbcr;
+    uint64_t pc;
+    uint32_t cpsr;
+    uint32_t _pad;
+} arm_registers_t;
+
+typedef struct registers {
+    union {
+        x86_registers_t x86;
+        arm_registers_t arm;
+    };
+} registers_t;
+
 /**
  * typedef for forward compatibility with 64-bit guests
  */
@@ -472,10 +597,10 @@ typedef enum arch {
 typedef struct {
     translation_mechanism_t translate_mechanism;
 
-    addr_t addr;    /**< specify iff using VMI_TM_NONE, VMI_TM_PROCESS_DTB or VMI_TM_PROCESS_PID */
-    char *ksym;     /**< specify iff using VMI_TM_KERNEL_SYMBOL */
-    addr_t dtb;     /**< specify iff using VMI_TM_PROCESS_DTB */
-    vmi_pid_t pid;  /**< specify iff using VMI_TM_PROCESS_PID */
+    addr_t addr;      /**< specify iff using VMI_TM_NONE, VMI_TM_PROCESS_DTB or VMI_TM_PROCESS_PID */
+    const char *ksym; /**< specify iff using VMI_TM_KERNEL_SYMBOL */
+    addr_t dtb;       /**< specify iff using VMI_TM_PROCESS_DTB */
+    vmi_pid_t pid;    /**< specify iff using VMI_TM_PROCESS_PID */
 } access_context_t;
 
 /**
@@ -501,11 +626,6 @@ typedef struct _ustring {
 } unicode_string_t;
 
 /**
- * Custom config input source
- */
-typedef void* vmi_config_t;
-
-/**
  * @brief LibVMI Instance.
  *
  * This struct holds all of the relavent information for an instance of
@@ -520,97 +640,121 @@ typedef struct vmi_instance *vmi_instance_t;
  */
 
 /**
- * Initializes access to a specific VM or file given a name.  All
+ * Initializes access to a specific VM or file given a name or an ID.  All
  * calls to vmi_init must eventually call vmi_destroy.
  *
  * This is a costly funtion in terms of the time needed to execute.
  * You should call this function only once per VM or file, and then use the
  * resulting instance when calling any of the other library functions.
  *
+ * When this function returns VMI_SUCCESS, you will have access to the physical
+ * memory of the target VM, as well as vCPU register functions. If you need
+ * access to virtual-to-physical translation or OS specific information,
+ * you will further need to call the appropriate init functions. Alternatively,
+ * you can use vmi_init_complete to initialize access to all LibVMI functions.
+ *
  * @param[out] vmi Struct that holds instance information
- * @param[in] flags VMI_AUTO, VMI_XEN, VMI_KVM, or VMI_FILE plus
- *  VMI_INIT_PARTIAL or VMI_INIT_COMPLETE
- * @param[in] name Unique name specifying the VM or file to view
+ * @param[in] mode Specifying the hypervisor mode to init
+ *                 You can call vmi_get_access_mode prior to calling vmi_init to
+ *                 automatically determine this.
+ * @param[in] domain Unique name or id specifying the VM or file to view
+ *                   Need to specify whether this is a domainname or domainid
+ *                   by setting either VMI_INIT_DOMAINNAME or VMI_INIT_DOMAINID
+ *                   on init_flags.
+ * @param[in] init_flags Init flags to specify the domain input (name or id) and
+ *                       to initialize further LibVMI features, such as events.
+ * @param[in] init_data In case initialization requires additional information
+ *                      for a given hypervisor, it can be provided via this
+ *                      input. A subsequent call to vmi_destroy will release
+ *                      any handles provided here, and so the calling application
+ *                      cannot continue to use them after calling vmi_destroy.
+ * @param[out] error Optional. If not NULL and the function returns VMI_FAILURE,
+ *                   this will specify the stage at which initialization failed.
  * @return VMI_SUCCESS or VMI_FAILURE
  */
 status_t vmi_init(
     vmi_instance_t *vmi,
-    uint32_t flags,
-    const char *name);
+    vmi_mode_t mode,
+    void* domain,
+    uint64_t init_flags,
+    void *init_data,
+    vmi_init_error_t *error);
 
 /**
- * Initializes access to a specific VM with a custom configuration source.  All
- * calls to vmi_init_custom must eventually call vmi_destroy.
+ * Initializes access to a specific VM or file given a name or an ID.  All
+ * calls to vmi_init_complete must eventually call vmi_destroy.
  *
  * This is a costly funtion in terms of the time needed to execute.
  * You should call this function only once per VM or file, and then use the
  * resulting instance when calling any of the other library functions.
  *
- * @param[out] vmi Struct that holds instance information
- * @param[in] flags VMI_AUTO, VMI_XEN, VMI_KVM, or VMI_FILE plus
- *  VMI_INIT_PARTIAL or VMI_INIT_COMPLETE plus
- *  VMI_CONFIG_FILE/STRING/GHASHTABLE
- * @param[in] config Pointer to the specified configuration structure
- * @return VMI_SUCCESS or VMI_FAILURE
- */
-status_t vmi_init_custom(
-    vmi_instance_t *vmi,
-    uint32_t flags,
-    vmi_config_t config);
-
-/**
- * Completes initialization.  Call this after calling vmi_init with
- * VMI_INIT_PARTIAL.  Calling this at any other time results in undefined
- * behavior.  The partial init provides physical memory access only.  So
- * the purpose of this function is to allow for a staged init of LibVMI.
- * You can gain physical memory access, run some heuristics to obtain
- * the necessary offsets, and then complete the init.
+ * When this function returns VMI_SUCCESS, you will have access to the physical
+ * memory of the target VM, accessing vCPU registers, virtual-to-physcal
+ * translation as well as OS specific functions.
  *
- * @param[in,out] vmi Struct that holds the instance information and was
- *  passed to vmi_init with a VMI_INIT_PARTIAL flag
- * @param[in] config Pointer to a string containing the config entries for
- *  this domain.  Entries should be specified as in the config file
- *  (e.g., '{ostype = "Windows"; win_tasks = 0x88; win_pdbase = 0x18; ...}').
- *  If this is NULL, then the config is pulled from /etc/libvmi.conf.
+ * @param[out] vmi Struct that holds instance information
+ * @param[in] domain Unique name or id specifying the VM or file to view
+ *                   Need to specify whether this is a domainname or domainid
+ *                   by setting either VMI_INIT_DOMAINNAME or VMI_INIT_DOMAINID
+ *                   on init_flags.
+ * @param[in] init_flags Additional flags to initialize
+ * @param[in] init_data In case initialization requires additional information
+ *                      for a given hypervisor, it can be provided via this
+ *                      input. A subsequent call to vmi_destroy will release
+ *                      any handles provided here, and so the calling application
+ *                      cannot continue to use them after calling vmi_destroy.
+ * @param[in] config_mode The type of OS configuration that is provided.
+ * @param[in] config Configuration is passed directly to LibVMI (ie. in a string
+ *                   or in a GHashTable) or NULL of global config file is used.
+ * @param[out] error Optional. If not NULL and the function returns VMI_FAILURE,
+ *                   this will specify the stage at which initialization failed.
  * @return VMI_SUCCESS or VMI_FAILURE
  */
 status_t vmi_init_complete(
     vmi_instance_t *vmi,
-    const char *config);
+    void *domain,
+    uint64_t init_flags,
+    void *init_data,
+    vmi_config_t config_mode,
+    void *config,
+    vmi_init_error_t *error);
 
-/**
- * Completes initialization.  Call this after calling vmi_init or vmi_init_custom
- * with VMI_INIT_PARTIAL.  Calling this at any other time results in undefined
- * behavior.  The partial init provides physical memory access only.  So
- * the purpose of this function is to allow for a staged init of LibVMI.
- * You can gain physical memory access, run some heuristics to obtain
- * the necessary offsets, and then complete the init.
+/*
+ * Initialize or reinitialize the paging specific functionality of LibVMI
+ * required for virtual-to-physical translation.
  *
- * @param[in,out] vmi Struct that holds the instance information and was
- *  passed to vmi_init with a VMI_INIT_PARTIAL flag
- * @param[in] flags VMI_CONFIG_FILE/STRING/GHASHTABLE
- * @param[in] config Pointer to a structure containing the config entries for
- *  this domain.
- * @return VMI_SUCCESS or VMI_FAILURE
- */
-status_t vmi_init_complete_custom(
-    vmi_instance_t *vmi,
-    uint32_t flags,
-    vmi_config_t config);
-
-/**
- * Initialize or reinitialize the paging specific functionality of LibVMI.
- * This function is most useful when dynamically monitoring the booting of
- * an OS in VMI_INIT_PARTIAL mode.
+ * Note: this function is designed only for live VMs (ie. VMI_XEN or VMI_KVM).
+ *  and will not work in VMI_FILE mode as that requires OS-specific heuristics.
  *
  * @param[in] vmi LibVMI instance
- * @param[in] force_reinit Force the reinitialization of the paging mode
- *  even if one was already setup previously.
- * @return The current page mode of the architecture or VMI_PM_UNKNOWN.
+ * @param[in] paging_flags Additional flags to configure paging using
+                           VMI_PM_INITFLAG_* values.
+ * @return The page mode that was initialized, or VMI_PM_UNKNOWN.
  */
 page_mode_t vmi_init_paging(
     vmi_instance_t vmi,
-    uint8_t force_reinit);
+    uint64_t flags);
+
+/*
+ * Initialize the OS specific functionality of LibVMI required for functions
+ * such as vmi_*_ksym. If the user hasn't called vmi_init_paging yet, this
+ * function will do that automatically.
+ *
+ * @param[in] vmi LibVMI instance
+ * @param[in] config_mode The type of OS configuration that is provided.
+ * @param[in] config Configuration is passed directly to LibVMI (ie. in a string
+ *                   or in a GHashTable) or NULL if global config file is used.
+ * @param[out] error Optional. If not NULL and the function returns VMI_OS_UNKNOWN,
+ *                   this will specify the stage at which initialization failed.
+ * @return VMI_OS_UNKNOWN when the configuration didn't work for the VM, otherwise
+ *         the OS type that has been initialized (ie. VMI_OS_WINDOWS or
+ *         VMI_OS_LINUX).
+ */
+os_t vmi_init_os(
+    vmi_instance_t vmi,
+    vmi_config_t config_mode,
+    void *config,
+    vmi_init_error_t *error);
 
 /**
  * Destroys an instance by freeing memory and closing any open handles.
@@ -629,6 +773,15 @@ status_t vmi_destroy(
  */
 vmi_arch_t vmi_get_library_arch();
 
+/**
+ * Get full path of associated rekall profile
+ *
+ * @param[in] vmi LibVMI instance
+ * @return Full path of the rekall profile
+ */
+const char *vmi_get_rekall_path(
+    vmi_instance_t vmi);
+
 /*---------------------------------------------------------
  * Memory translation functions from memory.c
  */
@@ -639,11 +792,13 @@ vmi_arch_t vmi_get_library_arch();
  *
  * @param[in] vmi LibVMI instance
  * @param[in] vaddr Desired kernel virtual address to translate
- * @return Physical address, or zero on error
+ * @param[out] paddr Physical address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-addr_t vmi_translate_kv2p(
+status_t vmi_translate_kv2p(
     vmi_instance_t vmi,
-    addr_t vaddr);
+    addr_t vaddr,
+    addr_t *paddr);
 
 /**
  * Performs the translation from a user virtual address to a
@@ -652,23 +807,27 @@ addr_t vmi_translate_kv2p(
  * @param[in] vmi LibVMI instance
  * @param[in] vaddr Desired kernel virtual address to translate
  * @param[in] pid Process id for desired user address space
- * @return Physical address, or zero on error
+ * @param[out] paddr Physical address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-addr_t vmi_translate_uv2p(
+status_t vmi_translate_uv2p(
     vmi_instance_t vmi,
     addr_t vaddr,
-    vmi_pid_t pid);
+    vmi_pid_t pid,
+    addr_t *paddr);
 
 /**
  * Performs the translation from a kernel symbol to a virtual address.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] symbol Desired kernel symbol to translate
- * @return Virtual address, or zero on error
+ * @param[out] paddr Virtual address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-addr_t vmi_translate_ksym2v(
+status_t vmi_translate_ksym2v(
     vmi_instance_t vmi,
-    const char *symbol);
+    const char *symbol,
+    addr_t *vaddr);
 
 /**
  * Performs the translation from a symbol to a virtual address.
@@ -678,17 +837,18 @@ addr_t vmi_translate_ksym2v(
  * @param[in] vmi LibVMI instance
  * @param[in] ctx Access context (beginning of PE header in Windows)
  * @param[in] symbol Desired symbol to translate
- * @return Virtual address, or zero on error
+ * @param[out] vaddr Virtual address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-addr_t vmi_translate_sym2v(
+status_t vmi_translate_sym2v(
     vmi_instance_t vmi,
     const access_context_t *ctx,
-    const char *symbol);
+    const char *symbol,
+    addr_t *vaddr);
 
 /**
  * Performs the translation from an RVA to a symbol
  * On Windows this function walks the PE export table.
- * The Linux translation works currently only for kernel symbols (pid=0 & base_vaddr=0).
  * Only the first matching symbol of System.map is returned.
  * ELF Headers are not supported.
  *
@@ -703,6 +863,21 @@ const char* vmi_translate_v2sym(
     addr_t rva);
 
 /**
+ * Performs the translation from VA to a symbol for Linux with KASLR offset
+ * Windows is not supported at this moment
+ * Only the first matching symbol of System.map is returned.
+ *
+ * @param[in] vmi LibVMI instance
+ * @param[in] ctx Access context
+ * @param[in] va VA to translate
+ * @return Symbol, or NULL on error
+ */
+const char* vmi_translate_v2ksym(
+    vmi_instance_t vmi,
+    const access_context_t *ctx,
+    addr_t va);
+
+/**
  * Given a pid, this function returns the virtual address of the
  * directory table base for this process' address space.  This value
  * is effectively what would be in the CR3 register while this process
@@ -710,11 +885,13 @@ const char* vmi_translate_v2sym(
  *
  * @param[in] vmi LibVMI instance
  * @param[in] pid Desired process id to lookup
- * @return The directory table base virtual address for \a pid
+ * @param[out] dtb The directory table base virtual address for a pid
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-addr_t vmi_pid_to_dtb(
+status_t vmi_pid_to_dtb(
     vmi_instance_t vmi,
-    vmi_pid_t pid);
+    vmi_pid_t pid,
+    addr_t *dtb);
 
 /**
  * Given a dtb, this function returns the PID corresponding to the
@@ -723,11 +900,13 @@ addr_t vmi_pid_to_dtb(
  *
  * @param[in] vmi LibVMI instance
  * @param[in] dtb Desired dtb to lookup
- * @return The PID corresponding to the dtb
+ * @param[out] pid The PID corresponding to the dtb
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-vmi_pid_t vmi_dtb_to_pid(
+status_t vmi_dtb_to_pid(
     vmi_instance_t vmi,
-    addr_t dtb);
+    addr_t dtb,
+    vmi_pid_t *pid);
 
 /**
  * Translates a virtual address to a physical address.
@@ -735,13 +914,15 @@ vmi_pid_t vmi_dtb_to_pid(
  * @param[in] vmi LibVMI instance
  * @param[in] dtb address of the relevant page directory base
  * @param[in] vaddr virtual address to translate via dtb
- * @return Physical address, or zero on error
+ * @param[out] paddr Physical address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 
-addr_t vmi_pagetable_lookup (
+status_t vmi_pagetable_lookup (
     vmi_instance_t vmi,
     addr_t dtb,
-    addr_t vaddr);
+    addr_t vaddr,
+    addr_t *paddr);
 
 /**
  * Gets the physical address and page size of the VA
@@ -765,19 +946,21 @@ status_t vmi_pagetable_lookup_extended(
  */
 
 /**
- * Reads \a count bytes from memory and stores the output in \a buf.
+ * Reads count bytes from memory and stores the output in a buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] ctx Access context
- * @param[out] buf The data read from memory
  * @param[in] count The number of bytes to read
- * @return The number of bytes read.
+ * @param[out] buf The data read from memory
+ * @param[out] bytes_read Optional. The number of bytes read
+ * @return VMI_SUCCESS if read is complete, VMI_FAILURE otherwise
  */
-size_t vmi_read(
+status_t vmi_read(
     vmi_instance_t vmi,
     const access_context_t *ctx,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_read);
 
 /**
  * Reads 8 bits from memory.
@@ -874,54 +1057,63 @@ unicode_string_t *vmi_read_unicode_str(
     const access_context_t *ctx);
 
 /**
- * Reads \a count bytes from memory located at the kernel symbol \a sym
- * and stores the output in \a buf.
+ * Reads count bytes from memory located at the kernel symbol sym
+ * and stores the output in a buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] sym Kernel symbol to read from
- * @param[out] buf The data read from memory
  * @param[in] count The number of bytes to read
- * @return The number of bytes read.
+ * @param[out] buf The data read from memory
+ * @param[out] bytes_read Optional. The number of bytes read
+ * @return VMI_SUCCESS if read is complete, VMI_FAILURE otherwise
  */
-size_t vmi_read_ksym(
+status_t vmi_read_ksym(
     vmi_instance_t vmi,
-    char *sym,
+    const char *sym,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_read
+);
 
 /**
- * Reads \a count bytes from memory located at the virtual address \a vaddr
- * and stores the output in \a buf.
+ * Reads count bytes from memory located at the virtual address vaddr
+ * and stores the output in buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] vaddr Virtual address to read from
  * @param[in] pid Pid of the virtual address space (0 for kernel)
- * @param[out] buf The data read from memory
  * @param[in] count The number of bytes to read
- * @return The number of bytes read.
+ * @param[out] buf The data read from memory
+ * @param[out] bytes_read Optional. The number of bytes read
+ * @return VMI_SUCCESS if read is complete, VMI_FAILURE otherwise
  */
-size_t vmi_read_va(
+status_t vmi_read_va(
     vmi_instance_t vmi,
     addr_t vaddr,
     vmi_pid_t pid,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_read
+);
 
 /**
- * Reads \a count bytes from memory located at the physical address \a paddr
- * and stores the output in \a buf.
+ * Reads count bytes from memory located at the physical address paddr
+ * and stores the output in a buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] paddr Physical address to read from
- * @param[out] buf The data read from memory
  * @param[in] count The number of bytes to read
- * @return The number of bytes read.
+ * @param[out] buf The data read from memory
+ * @param[out] bytes_read Optional. The number of bytes read
+ * @return VMI_SUCCESS if read is complete, VMI_FAILURE otherwise
  */
-size_t vmi_read_pa(
+status_t vmi_read_pa(
     vmi_instance_t vmi,
     addr_t paddr,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_read
+);
 
 /**
  * Reads 8 bits from memory, given a kernel symbol.
@@ -1129,6 +1321,7 @@ status_t vmi_convert_str_encoding(
  * Convenience function to free a unicode_string_t struct.
  *
  * @param[in] p_us Pointer to a unicode_string_t struct
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_free_unicode_str(
     unicode_string_t *p_us);
@@ -1214,69 +1407,77 @@ char *vmi_read_str_pa(
 
 
 /**
- * Writes \a count bytes to memory
+ * Writes count bytes to memory
  *
  * @param[in] vmi LibVMI instance
  * @param[in] ctx Access context
- * @param[in] buf The data written to memory
  * @param[in] count The number of bytes to write
- * @return The number of bytes written.
+ * @param[in] buf The data written to memory
+ * @param[out] bytes_written Optional. The numer of bytes written
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-size_t vmi_write(
+status_t vmi_write(
     vmi_instance_t vmi,
     const access_context_t *ctx,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_written);
 
 /**
- * Writes \a count bytes to memory located at the kernel symbol \a sym
- * from \a buf.
+ * Writes count bytes to memory located at the kernel symbol sym
+ * from a buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] sym Kernel symbol to write to
- * @param[in] buf The data written to memory
  * @param[in] count The number of bytes to write
- * @return The number of bytes written.
+ * @param[in] buf The data written to memory
+ * @param[out] bytes_written Optional. The numer of bytes written
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-size_t vmi_write_ksym(
+status_t vmi_write_ksym(
     vmi_instance_t vmi,
     char *sym,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_written);
 
 /**
- * Writes \a count bytes to memory located at the virtual address \a vaddr
- * from \a buf.
+ * Writes count bytes to memory located at the virtual address vaddr
+ * from buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] vaddr Virtual address to write to
  * @param[in] pid Pid of the virtual address space (0 for kernel)
- * @param[in] buf The data written to memory
  * @param[in] count The number of bytes to write
- * @return The number of bytes written.
+ * @param[in] buf The data written to memory
+ * @param[out] bytes_written Optional. The numer of bytes written
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-size_t vmi_write_va(
+status_t vmi_write_va(
     vmi_instance_t vmi,
     addr_t vaddr,
     vmi_pid_t pid,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_written);
 
 /**
- * Writes \a count bytes to memory located at the physical address \a paddr
- * from \a buf.
+ * Writes count bytes to memory located at the physical address paddr
+ * from buf.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] paddr Physical address to write to
  * @param[in] buf The data written to memory
  * @param[in] count The number of bytes to write
- * @return The number of bytes written.
+ * @param[out] bytes_written Optional. The numer of bytes written
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-size_t vmi_write_pa(
+status_t vmi_write_pa(
     vmi_instance_t vmi,
     addr_t paddr,
+    size_t count,
     void *buf,
-    size_t count);
+    size_t *bytes_written);
 
 /**
  * Writes 8 bits to memory
@@ -1612,10 +1813,6 @@ void vmi_print_hex_pa(
     addr_t paddr,
     size_t length);
 
-/*---------------------------------------------------------
- * Accessor functions from accessors.c
- */
-
 /**
  * Gets the name of the VM (or file) that LibVMI is accessing.
  *
@@ -1639,26 +1836,47 @@ uint64_t vmi_get_vmid(
  * resource is being using to access the memory (e.g., VMI_XEN,
  * VMI_KVM, or VMI_FILE).
  *
- * @param[in] vmi LibVMI instance
- * @return Access mode
+ * If LibVMI is already initialized it will return the active
+ * mode. If the LibVMI instance passed is NULL, it will
+ * automatically determine the mode.
+ *
+ * @param[in] vmi LibVMI instance or NULL
+ * @param[in] domain Unique name or id specifying the VM or file to view
+ *                   Need to specify whether this is a domainname or domainid
+ *                   by setting either VMI_INIT_DOMAINNAME or VMI_INIT_DOMAINID
+ *                   on init_flags.
+ * @param[in] init_flags Init flags to specify the domain input (name or id) and
+ *                       to initialize further LibVMI features, such as events.
+ * @param[in] init_data In case initialization requires additional information
+ *                      for a given hypervisor, it can be provided via this
+ *                      input.
+ * @param[out] mode The access mode that was identified.
+ * @return VMI_SUCCESS if LibVMI was able to access a hypervisor and found the
+ *         given domain; VMI_FAILURE otherwise.
  */
-uint32_t vmi_get_access_mode(
-    vmi_instance_t vmi);
+status_t vmi_get_access_mode(
+    vmi_instance_t vmi,
+    void *domain,
+    uint64_t init_flags,
+    void* init_data,
+    vmi_mode_t *mode);
 
 /**
  * Gets the current page mode for LibVMI, which tells what
  * type of address translation is in use (e.g., VMI_PM_LEGACY,
  * VMI_PM_PAE, or VMI_PM_IA32E).
  *
- * If paging mode is altered after vmi_init, the information
- *  preserved in vmi_instance_t will have become stale and
- *  require re-initialization.
+ * On live VMs every call to this function will re-check the current state
+ * of the specified vCPU. For file-mode it will just return the page-mode
+ * that was determined using OS-specific heuristics.
+ *
  *
  * @param[in] vmi LibVMI instance
  * @return Page mode
  */
 page_mode_t vmi_get_page_mode(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    unsigned long vcpu);
 
 /**
  * Gets the current address width for the given vmi_instance_t
@@ -1724,11 +1942,28 @@ win_ver_t vmi_get_winver_manual(
  *
  * @param[in] vmi LibVMI instance
  * @param[in] offset_name String name for desired offset
- * @return The offset value
+ * @param[out] offset The offset value
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
-uint64_t vmi_get_offset(
+status_t vmi_get_offset(
     vmi_instance_t vmi,
-    const char *offset_name);
+    const char *offset_name,
+    addr_t *offset);
+
+/**
+ * Get the memory offset associated with the given symbol and subsymbol in the struct
+ * @param[in] vmi LibVMI instance
+ * @param[in] struct_name String name for desired symbol
+ * @param[in] subsymbol String name for desired subsymbol
+ * @param[out] offset of subsymbol in struct (symbol)
+ *
+ * @return VMI_SUCCESS or VMI_FAILURE
+ */
+status_t vmi_get_kernel_struct_offset(
+    vmi_instance_t vmi,
+    const char* struct_name,
+    const char* member,
+    addr_t *addr);
 
 /**
  * Gets the memory size of the guest or file that LibVMI is currently
@@ -1792,15 +2027,34 @@ unsigned int vmi_get_num_vcpus (
  */
 status_t vmi_get_vcpureg(
     vmi_instance_t vmi,
-    reg_t *value,
-    registers_t reg,
+    uint64_t *value,
+    reg_t reg,
+    unsigned long vcpu);
+
+/**
+ * Gets the current value of VCPU registers.  This currently only
+ * supports x86 registers.  When LibVMI is accessing a raw
+ * memory file or KVM, this function will fail.
+ *
+ * @param[in] vmi LibVMI instance
+ * @param[out] regs The register struct to be filled
+ * @param[in] vcpu The index of the VCPU to access, use 0 for single VCPU systems
+ * @return VMI_SUCCESS or VMI_FAILURE
+ */
+status_t vmi_get_vcpuregs(
+    vmi_instance_t vmi,
+    registers_t *regs,
     unsigned long vcpu);
 
 /**
  * Sets the current value of a VCPU register.  This currently only
  * supports control registers.  When LibVMI is accessing a raw
  * memory file, this function will fail. Operating upon an unpaused
- * VM with this function is likely to have unexpected results.
+ * vCPU with this function is likely to have unexpected results.
+ *
+ * On Xen HVM VMs the entire domain must be paused. Using this function in an event
+ * callback where only the vCPU is paused will have unexpected results as this
+ * function is not multi-vCPU safe.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] value Value to assign to the register
@@ -1810,8 +2064,26 @@ status_t vmi_get_vcpureg(
  */
 status_t vmi_set_vcpureg(
     vmi_instance_t vmi,
-    reg_t value,
-    registers_t reg,
+    uint64_t value,
+    reg_t reg,
+    unsigned long vcpu);
+
+/**
+ * Sets the vCPU registers to the ones passed in the struct. It is important to have
+ * a valid value in all registers when calling this function, so the user likely
+ * wants to call vmi_get_vcpuregs before calling this function.
+ * When LibVMI is accessing a raw memory file or KVM, this function will fail.
+ * Operating upon an unpaused VM with this function is likely to have unexpected
+ * results.
+ *
+ * @param[in] vmi LibVMI instance
+ * @param[regs] regs The register struct holding the values to be set
+ * @param[in] vcpu The index of the VCPU to access, use 0 for single VCPU systems
+ * @return VMI_SUCCESS or VMI_FAILURE
+ */
+status_t vmi_set_vcpuregs(
+    vmi_instance_t vmi,
+    registers_t *regs,
     unsigned long vcpu);
 
 /**
@@ -1840,9 +2112,12 @@ status_t vmi_resume_vm(
  * the cache is incorrect, or out of date.
  *
  * @param[in] vmi LibVMI instance
+ * @param[in] dtb The process address space to flush, or ~0ull for all.
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_v2pcache_flush(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    addr_t dtb);
 
 /**
  * Adds one entry to LibVMI's internal virtual to physical address
@@ -1850,8 +2125,9 @@ void vmi_v2pcache_flush(
  *
  * @param[in] vmi LibVMI instance
  * @param[in] va Virtual address
- * @param[in] dtb Directory table base for \a va
+ * @param[in] dtb Directory table base for va
  * @param[in] pa Physical address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_v2pcache_add(
     vmi_instance_t vmi,
@@ -1865,6 +2141,7 @@ void vmi_v2pcache_add(
  * the cache is incorrect, or out of date.
  *
  * @param[in] vmi LibVMI instance
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_symcache_flush(
     vmi_instance_t vmi);
@@ -1878,6 +2155,7 @@ void vmi_symcache_flush(
  * @param[in] pid PID
  * @param[in] sym Symbol
  * @param[in] va Virtual address
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_symcache_add(
     vmi_instance_t vmi,
@@ -1892,6 +2170,7 @@ void vmi_symcache_add(
  * the cache is incorrect, or out of date.
  *
  * @param[in] vmi LibVMI instance
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_rvacache_flush(
     vmi_instance_t vmi);
@@ -1905,6 +2184,7 @@ void vmi_rvacache_flush(
  * @param[in] pid PID
  * @param[in] rva Relative virtual address
  * @param[in] sym Symbol
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_rvacache_add(
     vmi_instance_t vmi,
@@ -1919,6 +2199,7 @@ void vmi_rvacache_add(
  * the cache is incorrect, or out of date.
  *
  * @param[in] vmi LibVMI instance
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_pidcache_flush(
     vmi_instance_t vmi);
@@ -1930,6 +2211,7 @@ void vmi_pidcache_flush(
  * @param[in] vmi LibVMI instance
  * @param[in] pid Process id
  * @param[in] dtb Directory table base
+ * @return VMI_SUCCESS or VMI_FAILURE
  */
 void vmi_pidcache_add(
     vmi_instance_t vmi,
@@ -1943,6 +2225,14 @@ void vmi_pidcache_add(
  * @return String file path location of the Linux system map
  */
 const char * vmi_get_linux_sysmap(vmi_instance_t vmi);
+
+/**
+ * Returns the path of the FreeBSD system map file for the given vmi instance
+ *
+ * @param[in] vmi LibVMI instance
+ * @return String file path location of the FreeBSD system map
+ */
+const char * vmi_get_freebsd_sysmap(vmi_instance_t vmi);
 
 #pragma GCC visibility pop
 

@@ -40,7 +40,7 @@ dbprint(
     char *format,
     ...)
 {
-    if(category & VMI_DEBUG) {
+    if (category & VMI_DEBUG) {
         va_list args;
 
         va_start(args, format);
@@ -109,7 +109,6 @@ aligned_addr(
     addr_t mask = ~((addr_t) vmi->page_size - 1);
     addr_t aligned = (addr_t) addr & (addr_t) mask;
 
-    //    printf ("%llx & %llx = %llx\n", addr, mask, aligned);
     return aligned;
 
 }
@@ -131,6 +130,9 @@ vmi_convert_str_encoding(
     iconv_t cd = 0;
     size_t iconv_val = 0;
 
+    if (!in || !out)
+        return VMI_FAILURE;
+
     size_t inlen = in->length;
     size_t outlen = 2 * (inlen + 1);
 
@@ -150,8 +152,7 @@ vmi_convert_str_encoding(
         if (EINVAL == errno) {
             dbprint(VMI_DEBUG_READ, "%s: conversion from '%s' to '%s' not supported\n",
                     __FUNCTION__, in->encoding, out->encoding);
-        }
-        else {
+        } else {
             dbprint(VMI_DEBUG_READ, "%s: Initializiation failure: %s\n", __FUNCTION__,
                     strerror(errno));
         }   // if-else
@@ -166,18 +167,18 @@ vmi_convert_str_encoding(
                 "out string '%s' length %zu\n", __FUNCTION__,
                 in->contents, in->length, out->contents, outlen);
         switch (errno) {
-        case EILSEQ:
-            dbprint(VMI_DEBUG_READ, "invalid multibyte sequence");
-            break;
-        case EINVAL:
-            dbprint(VMI_DEBUG_READ, "incomplete multibyte sequence");
-            break;
-        case E2BIG:
-            dbprint(VMI_DEBUG_READ, "no more room");
-            break;
-        default:
-            dbprint(VMI_DEBUG_READ, "error: %s\n", strerror(errno));
-            break;
+            case EILSEQ:
+                dbprint(VMI_DEBUG_READ, "invalid multibyte sequence");
+                break;
+            case EINVAL:
+                dbprint(VMI_DEBUG_READ, "incomplete multibyte sequence");
+                break;
+            case E2BIG:
+                dbprint(VMI_DEBUG_READ, "no more room");
+                break;
+            default:
+                dbprint(VMI_DEBUG_READ, "error: %s\n", strerror(errno));
+                break;
         }   // switch
         goto fail;
     }   // if failure
@@ -205,6 +206,9 @@ void
 vmi_free_unicode_str(
     unicode_string_t *p_us)
 {
+    if (!p_us)
+        return;
+
     if (p_us->contents)
         free(p_us->contents);
     memset((void *) p_us, 0, sizeof(*p_us));

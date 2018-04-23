@@ -56,27 +56,40 @@
 #ifndef XEN_EVENTS_H
 #define XEN_EVENTS_H
 
-status_t xen_init_events_legacy(vmi_instance_t vmi);
-status_t xen_init_events_46(vmi_instance_t vmi);
-status_t xen_init_events_48(vmi_instance_t vmi);
+status_t xen_init_events_legacy(
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
+status_t xen_init_events_46(
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
+status_t xen_init_events_48(
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 
 void xen_events_destroy_legacy(vmi_instance_t vmi);
 void xen_events_destroy_46(vmi_instance_t vmi);
 void xen_events_destroy_48(vmi_instance_t vmi);
 
-static inline status_t xen_init_events(vmi_instance_t vmi)
+static inline status_t xen_init_events(
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data)
 {
     xen_instance_t *xen = xen_get_instance(vmi);
-    if ( xen->major_version == 4 )
-    {
-        switch(xen->minor_version)
-        {
-        case 2 ... 5:
-            return xen_init_events_legacy(vmi);
-        case 6 ... 7:
-            return xen_init_events_46(vmi);
-        case 8:
-            return xen_init_events_48(vmi);
+    if ( xen->major_version == 4 ) {
+        switch (xen->minor_version) {
+            case 0 ... 1:
+                dbprint(VMI_DEBUG_XEN, "Xen 4.0/4.1 has no events support!\n");
+                break;
+            case 2 ... 5:
+                return xen_init_events_legacy(vmi, init_flags, init_data);
+            case 6 ... 7:
+                return xen_init_events_46(vmi, init_flags, init_data);
+            default:
+                return xen_init_events_48(vmi, init_flags, init_data);
         };
     };
     return VMI_FAILURE;
@@ -85,19 +98,19 @@ static inline status_t xen_init_events(vmi_instance_t vmi)
 static inline void xen_events_destroy(vmi_instance_t vmi)
 {
     xen_instance_t *xen = xen_get_instance(vmi);
-    if ( xen->major_version == 4 )
-    {
-        switch(xen->minor_version)
-        {
-        case 2 ... 5:
-            xen_events_destroy_legacy(vmi);
-            break;
-        case 6 ... 7:
-            xen_events_destroy_46(vmi);
-            break;
-        case 8:
-            xen_events_destroy_48(vmi);
-            break;
+    if ( xen->major_version == 4 ) {
+        switch (xen->minor_version) {
+            case 0 ... 1:
+                break;
+            case 2 ... 5:
+                xen_events_destroy_legacy(vmi);
+                break;
+            case 6 ... 7:
+                xen_events_destroy_46(vmi);
+                break;
+            default:
+                xen_events_destroy_48(vmi);
+                break;
         };
     };
 }

@@ -62,12 +62,15 @@ file_get_memory(
 
     if (paddr + length >= vmi->max_physical_address) {
         dbprint
-            (VMI_DEBUG_FILE, "--%s: request for PA range [0x%.16"PRIx64"-0x%.16"PRIx64"] reads past end of file\n",
-             __FUNCTION__, paddr, paddr + length);
+        (VMI_DEBUG_FILE, "--%s: request for PA range [0x%.16"PRIx64"-0x%.16"PRIx64"] reads past end of file\n",
+         __FUNCTION__, paddr, paddr + length);
         goto error_noprint;
     }   // if
 
-    memory = safe_malloc(length);
+    memory = g_malloc0(length);
+
+    if ( !memory )
+        return NULL;
 
 #if USE_MMAP
     (void) memcpy(memory,
@@ -110,7 +113,9 @@ file_release_memory(
 
 status_t
 file_init(
-    vmi_instance_t vmi)
+    vmi_instance_t vmi,
+    uint32_t UNUSED(init_flags),
+    void *UNUSED(init_data))
 {
     vmi->driver.driver_data = g_malloc0(sizeof(file_instance_t));
     return VMI_SUCCESS;
@@ -118,7 +123,9 @@ file_init(
 
 status_t
 file_init_vmi(
-    vmi_instance_t vmi)
+    vmi_instance_t vmi,
+    uint32_t UNUSED(init_flags),
+    void *UNUSED(init_data))
 {
     file_instance_t *fi = file_get_instance(vmi);
     FILE *fhandle = NULL;
@@ -168,7 +175,7 @@ file_init_vmi(
 
 #endif // USE_MMAP
 
-    vmi->hvm = 0;
+    vmi->vm_type = NORMAL;
     return VMI_SUCCESS;
 
 fail:
@@ -238,22 +245,21 @@ error_exit:
 status_t
 file_get_vcpureg(
     vmi_instance_t vmi,
-    reg_t *value,
-    registers_t reg,
+    uint64_t *value,
+    reg_t reg,
     unsigned long UNUSED(vcpu))
 {
     switch (reg) {
-    case CR3:
-        if (vmi->kpgd) {
-            *value = vmi->kpgd;
-        }
-        else {
+        case CR3:
+            if (vmi->kpgd) {
+                *value = vmi->kpgd;
+            } else {
+                goto error_exit;
+            }
+            break;
+        default:
             goto error_exit;
-        }
-        break;
-    default:
-        goto error_exit;
-        break;
+            break;
     }
 
     return VMI_SUCCESS;
@@ -292,7 +298,9 @@ file_is_pv(
 status_t
 file_test(
     uint64_t UNUSED(id),
-    const char *name)
+    const char *name,
+    uint64_t UNUSED(init_flags),
+    void* UNUSED(init_data))
 {
     status_t ret = VMI_FAILURE;
     FILE *f = NULL;

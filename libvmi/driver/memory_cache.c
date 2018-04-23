@@ -32,6 +32,7 @@
 #include "glib_compat.h"
 
 struct memory_cache_entry {
+    vmi_instance_t vmi;
     addr_t paddr;
     uint32_t length;
     time_t last_updated;
@@ -39,15 +40,6 @@ struct memory_cache_entry {
     void *data;
 };
 typedef struct memory_cache_entry *memory_cache_entry_t;
-static void *(
-    *get_data_callback) (
-    vmi_instance_t,
-    addr_t,
-    uint32_t) = NULL;
-static void (
-    *release_data_callback) (
-    void *,
-    size_t) = NULL;
 
 static inline
 void *get_memory_data(
@@ -55,7 +47,7 @@ void *get_memory_data(
     addr_t paddr,
     uint32_t length)
 {
-    return get_data_callback(vmi, paddr, length);
+    return vmi->get_data_callback(vmi, paddr, length);
 }
 
 #if ENABLE_PAGE_CACHE == 1
@@ -69,7 +61,7 @@ memory_cache_entry_free(
     memory_cache_entry_t entry = (memory_cache_entry_t) data;
 
     if (entry) {
-        release_data_callback(entry->data, entry->length);
+        entry->vmi->release_data_callback(entry->data, entry->length);
         free(entry);
     }
 }
@@ -97,16 +89,16 @@ validate_and_return_data(
     time_t now = time(NULL);
 
     if (vmi->memory_cache_age &&
-        (now - entry->last_updated > vmi->memory_cache_age)) {
+            (now - entry->last_updated > vmi->memory_cache_age)) {
         dbprint(VMI_DEBUG_MEMCACHE, "--MEMORY cache refresh 0x%"PRIx64"\n", entry->paddr);
-        release_data_callback(entry->data, entry->length);
+        vmi->release_data_callback(entry->data, entry->length);
         entry->data = get_memory_data(vmi, entry->paddr, entry->length);
         entry->last_updated = now;
 
         GList* lru_entry = g_queue_find_custom(vmi->memory_cache_lru,
-                &entry->paddr, g_int64_equal);
+                                               &entry->paddr, g_int64_equal);
         g_queue_unlink(vmi->memory_cache_lru,
-                lru_entry);
+                       lru_entry);
         g_queue_push_head_link(vmi->memory_cache_lru, lru_entry);
     }
     entry->last_used = now;
@@ -126,18 +118,22 @@ static memory_cache_entry_t create_new_entry (vmi_instance_t vmi, addr_t paddr,
     //
     // TODO: perform other reasonable checks
 
-    if (vmi->hvm && (paddr + length > vmi->max_physical_address)) {
+    if ((vmi->vm_type == HVM || vmi->vm_type == NORMAL) && (paddr + length > vmi->max_physical_address)) {
         errprint("--requesting PA [0x%"PRIx64"] beyond max physical address [0x%"PRIx64"]\n",
-                paddr + length, vmi->max_physical_address);
+                 paddr + length, vmi->max_physical_address);
         errprint("\tpaddr: %"PRIx64", length %"PRIx32", vmi->max_physical_address %"PRIx64"\n", paddr, length,
-                vmi->max_physical_address);
+                 vmi->max_physical_address);
         return 0;
     }
 
     memory_cache_entry_t entry =
         (memory_cache_entry_t)
-        safe_malloc(sizeof(struct memory_cache_entry));
+        g_malloc0(sizeof(struct memory_cache_entry));
 
+    if ( !entry )
+        return NULL;
+
+    entry->vmi = vmi;
     entry->paddr = paddr;
     entry->length = length;
     entry->last_updated = time(NULL);
@@ -166,8 +162,8 @@ memory_cache_init(
     vmi->memory_cache_lru = g_queue_new();
     vmi->memory_cache_age = age_limit;
     vmi->memory_cache_size_max = MAX_PAGE_CACHE_SIZE;
-    get_data_callback = get_data;
-    release_data_callback = release_data;
+    vmi->get_data_callback = get_data;
+    vmi->release_data_callback = release_data;
 }
 
 void *
@@ -187,8 +183,7 @@ memory_cache_insert(
     if ((entry = g_hash_table_lookup(vmi->memory_cache, key)) != NULL) {
         dbprint(VMI_DEBUG_MEMCACHE, "--MEMORY cache hit 0x%"PRIx64"\n", paddr);
         return validate_and_return_data(vmi, entry);
-    }
-    else {
+    } else {
         if (g_queue_get_length(vmi->memory_cache_lru) >= vmi->memory_cache_size_max) {
             clean_cache(vmi);
         }
@@ -201,11 +196,21 @@ memory_cache_insert(
             return 0;
         }
 
-        key = safe_malloc(sizeof(gint64));
+        key = g_malloc0(sizeof(gint64));
+        if ( !key ) {
+            g_free(entry);
+            return 0;
+        }
+
+        gint64 *key2 = g_malloc0(sizeof(gint64));
+        if ( !key2 ) {
+            g_free(entry);
+            g_free(key);
+            return 0;
+        }
+
         *key = paddr;
         g_hash_table_insert(vmi->memory_cache, key, entry);
-
-        gint64 *key2 = safe_malloc(sizeof(gint64));
 
         *key2 = paddr;
         g_queue_push_head(vmi->memory_cache_lru, key2);
@@ -249,14 +254,14 @@ memory_cache_destroy(
 
     vmi->memory_cache_age = 0;
     vmi->memory_cache_size_max = 0;
-    get_data_callback = NULL;
-    release_data_callback = NULL;
+    vmi->get_data_callback = NULL;
+    vmi->release_data_callback = NULL;
 }
 
 #else
 void
 memory_cache_init(
-    vmi_instance_t UNUSED(vmi),
+    vmi_instance_t vmi,
     void *(*get_data) (vmi_instance_t,
                        addr_t,
                        uint32_t),
@@ -264,8 +269,8 @@ memory_cache_init(
                           size_t),
     unsigned long UNUSED(age_limit))
 {
-    get_data_callback = get_data;
-    release_data_callback = release_data;
+    vmi->get_data_callback = get_data;
+    vmi->release_data_callback = release_data;
 }
 
 void *
@@ -273,11 +278,11 @@ memory_cache_insert(
     vmi_instance_t vmi,
     addr_t paddr)
 {
-    if(paddr == vmi->last_used_page_key && vmi->last_used_page) {
+    if (paddr == vmi->last_used_page_key && vmi->last_used_page) {
         return vmi->last_used_page;
     } else {
-        if(vmi->last_used_page_key && vmi->last_used_page) {
-            release_data_callback(vmi->last_used_page, vmi->page_size);
+        if (vmi->last_used_page_key && vmi->last_used_page) {
+            vmi->release_data_callback(vmi->last_used_page, vmi->page_size);
         }
         vmi->last_used_page = get_memory_data(vmi, paddr, vmi->page_size);
         vmi->last_used_page_key = paddr;
@@ -289,8 +294,8 @@ void memory_cache_remove(
     vmi_instance_t vmi,
     addr_t paddr)
 {
-    if(paddr == vmi->last_used_page_key && vmi->last_used_page) {
-        release_data_callback(vmi->last_used_page, vmi->page_size);
+    if (paddr == vmi->last_used_page_key && vmi->last_used_page) {
+        vmi->release_data_callback(vmi->last_used_page, vmi->page_size);
     }
 }
 
@@ -298,12 +303,12 @@ void
 memory_cache_destroy(
     vmi_instance_t vmi)
 {
-    if(vmi->last_used_page_key && vmi->last_used_page) {
-        release_data_callback(vmi->last_used_page, vmi->page_size);
+    if (vmi->last_used_page_key && vmi->last_used_page) {
+        vmi->release_data_callback(vmi->last_used_page, vmi->page_size);
     }
     vmi->last_used_page_key = 0;
     vmi->last_used_page = NULL;
-    get_data_callback = NULL;
-    release_data_callback = NULL;
+    vmi->get_data_callback = NULL;
+    vmi->release_data_callback = NULL;
 }
 #endif

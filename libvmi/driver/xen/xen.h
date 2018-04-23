@@ -29,13 +29,17 @@
 #define XEN_DRIVER_H
 
 #if ENABLE_XEN_EVENTS == 1
- #include "driver/xen/xen_events.h"
+#include "driver/xen/xen_events.h"
 #endif
 
 status_t xen_init(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 status_t xen_init_vmi(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 void xen_destroy(
     vmi_instance_t vmi);
 uint64_t xen_get_domainid_from_name(
@@ -65,18 +69,22 @@ status_t xen_get_memsize(
     addr_t *maximum_physical_address);
 status_t xen_get_vcpureg(
     vmi_instance_t vmi,
-    reg_t *value,
-    registers_t reg,
+    uint64_t *value,
+    reg_t reg,
     unsigned long vcpu);
-status_t
-xen_set_vcpureg(
+status_t xen_get_vcpuregs(
     vmi_instance_t vmi,
-    reg_t value,
-    registers_t reg,
+    registers_t *regs,
     unsigned long vcpu);
-status_t xen_get_address_width(
+status_t xen_set_vcpureg(
     vmi_instance_t vmi,
-    uint8_t * width_in_bytes);
+    uint64_t value,
+    reg_t reg,
+    unsigned long vcpu);
+status_t xen_set_vcpuregs(
+    vmi_instance_t vmi,
+    registers_t *regs,
+    unsigned long vcpu);
 void *xen_read_page(
     vmi_instance_t vmi,
     addr_t page);
@@ -89,7 +97,9 @@ int xen_is_pv(
     vmi_instance_t vmi);
 status_t xen_test(
     uint64_t domainid,
-    const char *name);
+    const char *name,
+    uint64_t init_flags,
+    void* init_data);
 status_t xen_pause_vm(
     vmi_instance_t vmi);
 status_t xen_resume_vm(
@@ -98,15 +108,9 @@ status_t xen_set_domain_debug_control(
     vmi_instance_t vmi,
     unsigned long vcpu,
     int enable);
-status_t xen_create_shm_snapshot(
-    vmi_instance_t vmi);
-status_t xen_destroy_shm_snapshot(
-    vmi_instance_t vmi);
-size_t xen_get_dgpma(
+status_t xen_set_access_required(
     vmi_instance_t vmi,
-    addr_t paddr,
-    void** medial_addr_ptr,
-    size_t count);
+    bool required);
 
 static inline status_t
 driver_xen_setup(vmi_instance_t vmi)
@@ -125,18 +129,15 @@ driver_xen_setup(vmi_instance_t vmi)
     driver.set_name_ptr = &xen_set_domainname;
     driver.get_memsize_ptr = &xen_get_memsize;
     driver.get_vcpureg_ptr = &xen_get_vcpureg;
+    driver.get_vcpuregs_ptr = &xen_get_vcpuregs;
     driver.set_vcpureg_ptr = &xen_set_vcpureg;
-    driver.get_address_width_ptr = &xen_get_address_width;
+    driver.set_vcpuregs_ptr = &xen_set_vcpuregs;
     driver.read_page_ptr = &xen_read_page;
     driver.write_ptr = &xen_write;
     driver.is_pv_ptr = &xen_is_pv;
     driver.pause_vm_ptr = &xen_pause_vm;
     driver.resume_vm_ptr = &xen_resume_vm;
-#if ENABLE_SHM_SNAPSHOT == 1
-    driver.create_shm_snapshot_ptr = &xen_create_shm_snapshot;
-    driver.destroy_shm_snapshot_ptr = &xen_destroy_shm_snapshot;
-    driver.get_dgpma_ptr = &xen_get_dgpma;
-#endif
+    driver.set_access_required_ptr = &xen_set_access_required;
     vmi->driver = driver;
     return VMI_SUCCESS;
 }

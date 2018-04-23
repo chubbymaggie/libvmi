@@ -70,7 +70,10 @@ typedef struct v2m_cache_entry *v2m_cache_entry_t;
 
 static v2m_cache_entry_t v2m_cache_entry_create (vmi_instance_t vmi, addr_t ma, uint64_t length)
 {
-    v2m_cache_entry_t entry = (v2m_cache_entry_t) safe_malloc(sizeof(struct v2m_cache_entry));
+    v2m_cache_entry_t entry = (v2m_cache_entry_t) g_malloc0(sizeof(struct v2m_cache_entry));
+    if ( !entry )
+        return NULL;
+
     ma &= ~((addr_t)vmi->page_size - 1);
     entry->ma = ma;
     entry->length = length;
@@ -152,10 +155,9 @@ v2m_cache_del(
     // key collision doesn't really matter here because worst case
     // scenario we incur an small performance hit
 
-    if (TRUE == g_hash_table_remove(vmi->v2m_cache, key)){
+    if (TRUE == g_hash_table_remove(vmi->v2m_cache, key)) {
         return VMI_SUCCESS;
-    }
-    else{
+    } else {
         return VMI_FAILURE;
     }
 }

@@ -1,5 +1,5 @@
-/* The LibVMI Library is an introspection library that simplifies access to 
- * memory in a target virtual machine or in a file containing a dump of 
+/* The LibVMI Library is an introspection library that simplifies access to
+ * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
  *
  * Author: Steven Maresca (steven.maresca@zentific.com)
@@ -33,17 +33,20 @@
 
 vmi_event_t msr_event;
 
-event_response_t msr_write_cb(vmi_instance_t vmi, vmi_event_t *event) {
-    printf("MSR write happened: MSR=%lx Value=%lx\n", event->reg_event.context, event->reg_event.value);
+event_response_t msr_write_cb(vmi_instance_t vmi, vmi_event_t *event)
+{
+    printf("MSR write happened: MSR=%x Value=%lx\n", event->reg_event.msr, event->reg_event.value);
     return 0;
 }
 
 static int interrupted = 0;
-static void close_handler(int sig){
+static void close_handler(int sig)
+{
     interrupted = sig;
 }
 
-int main (int argc, char **argv) {
+int main (int argc, char **argv)
+{
     vmi_instance_t vmi;
     struct sigaction act;
     act.sa_handler = close_handler;
@@ -56,7 +59,7 @@ int main (int argc, char **argv) {
 
     char *name = NULL;
 
-    if(argc < 2){
+    if (argc < 2) {
         fprintf(stderr, "Usage: msr_events_example <name of VM>\n");
         exit(1);
     }
@@ -64,14 +67,15 @@ int main (int argc, char **argv) {
     // Arg 1 is the VM name.
     name = argv[1];
 
-    // Initialize the libvmi library.
-    if (vmi_init(&vmi, VMI_XEN | VMI_INIT_PARTIAL | VMI_INIT_EVENTS, name) == VMI_FAILURE){
+    /* initialize the libvmi library */
+    if (VMI_FAILURE ==
+            vmi_init_complete(&vmi, name, VMI_INIT_DOMAINNAME | VMI_INIT_EVENTS,
+                              NULL, VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL)) {
         printf("Failed to init LibVMI library.\n");
         return 1;
     }
-    else{
-        printf("LibVMI init succeeded!\n");
-    }
+
+    printf("LibVMI init succeeded!\n");
 
     /* Register event to track any writes to a MSR. */
     memset(&msr_event, 0, sizeof(vmi_event_t));
@@ -84,7 +88,7 @@ int main (int argc, char **argv) {
     vmi_register_event(vmi, &msr_event);
 
     printf("Waiting for events...\n");
-    while(!interrupted){
+    while (!interrupted) {
         vmi_events_listen(vmi,500);
     }
     printf("Finished with test.\n");

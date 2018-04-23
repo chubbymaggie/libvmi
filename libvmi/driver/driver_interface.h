@@ -32,9 +32,13 @@
 
 typedef struct driver_interface {
     status_t (*init_ptr) (
-        vmi_instance_t);
+        vmi_instance_t,
+        uint32_t init_flags,
+        void *init_data);
     status_t (*init_vmi_ptr) (
-        vmi_instance_t);
+        vmi_instance_t,
+        uint32_t init_flags,
+        void *init_data);
     void (*destroy_ptr) (
         vmi_instance_t);
     uint64_t (*get_id_from_name_ptr) (
@@ -64,17 +68,22 @@ typedef struct driver_interface {
         addr_t *);
     status_t (*get_vcpureg_ptr) (
         vmi_instance_t,
-        reg_t *,
-        registers_t,
+        uint64_t *,
+        reg_t,
+        unsigned long);
+    status_t (*get_vcpuregs_ptr) (
+        vmi_instance_t,
+        registers_t *,
         unsigned long);
     status_t(*set_vcpureg_ptr) (
         vmi_instance_t,
+        uint64_t,
         reg_t,
-        registers_t,
         unsigned long);
-    status_t (*get_address_width_ptr) (
-        vmi_instance_t vmi,
-        uint8_t * width);
+    status_t(*set_vcpuregs_ptr) (
+        vmi_instance_t,
+        registers_t *,
+        unsigned long);
     void *(*read_page_ptr) (
         vmi_instance_t,
         addr_t);
@@ -138,6 +147,12 @@ typedef struct driver_interface {
     status_t (*set_debug_event_ptr)(
         vmi_instance_t,
         bool enabled);
+    status_t (*set_privcall_event_ptr)(
+        vmi_instance_t,
+        bool enabled);
+    status_t (*set_desc_access_event_ptr)(
+        vmi_instance_t,
+        bool enabled);
     status_t (*slat_get_domain_state_ptr)(
         vmi_instance_t vmi,
         bool *state);
@@ -158,6 +173,9 @@ typedef struct driver_interface {
         uint16_t slat_idx,
         addr_t old_gfn,
         addr_t new_gfn);
+    status_t (*set_access_required_ptr)(
+        vmi_instance_t vmi,
+        bool required);
 
     /* Driver-specific data storage. */
     void* driver_data;
@@ -168,15 +186,21 @@ typedef struct driver_interface {
 } driver_interface_t;
 
 status_t driver_init_mode(
-    vmi_instance_t vmi,
+    const char *name,
     uint64_t domainid,
-    const char *name);
+    uint64_t init_flags,
+    void* init_data,
+    vmi_mode_t *mode);
 
 status_t driver_init(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 
 status_t driver_init_vmi(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 
 #endif /* DRIVER_INTERFACE_H */
 

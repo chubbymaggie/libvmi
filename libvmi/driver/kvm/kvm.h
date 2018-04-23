@@ -29,9 +29,13 @@
 #define KVM_H
 
 status_t kvm_init(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 status_t kvm_init_vmi(
-    vmi_instance_t vmi);
+    vmi_instance_t vmi,
+    uint32_t init_flags,
+    void *init_data);
 void kvm_destroy(
     vmi_instance_t vmi);
 uint64_t kvm_get_id_from_name(
@@ -61,8 +65,8 @@ status_t kvm_get_memsize(
     addr_t *maximum_physical_address);
 status_t kvm_get_vcpureg(
     vmi_instance_t vmi,
-    reg_t *value,
-    registers_t reg,
+    uint64_t *value,
+    reg_t reg,
     unsigned long vcpu);
 addr_t kvm_pfn_to_mfn(
     vmi_instance_t vmi,
@@ -79,7 +83,9 @@ int kvm_is_pv(
     vmi_instance_t vmi);
 status_t kvm_test(
     uint64_t domainid,
-    const char *name);
+    const char *name,
+    uint64_t init_flags,
+    void* init_data);
 status_t kvm_pause_vm(
     vmi_instance_t vmi);
 status_t kvm_resume_vm(

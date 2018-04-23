@@ -1,5 +1,5 @@
-/* The LibVMI Library is an introspection library that simplifies access to 
- * memory in a target virtual machine or in a file containing a dump of 
+/* The LibVMI Library is an introspection library that simplifies access to
+ * memory in a target virtual machine or in a file containing a dump of
  * a system's physical memory.  LibVMI is based on the XenAccess Library.
  *
  * Copyright 2011 Sandia Corporation. Under the terms of Contract
@@ -36,7 +36,7 @@
 int main (int argc, char **argv)
 {
     vmi_instance_t vmi;
-    addr_t list_head = 0, next_list_entry = 0;
+    addr_t list_head = 0, cur_list_entry = 0, next_list_entry = 0;
     addr_t current_process = 0;
     char *procname = NULL;
     vmi_pid_t pid = 0;
@@ -52,34 +52,34 @@ int main (int argc, char **argv)
     char *name = argv[1];
 
     /* initialize the libvmi library */
-    if (vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, name) == VMI_FAILURE) {
+    if (VMI_FAILURE ==
+            vmi_init_complete(&vmi, name, VMI_INIT_DOMAINNAME, NULL,
+                              VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL)) {
         printf("Failed to init LibVMI library.\n");
         return 1;
     }
 
     /* init the offset values */
     if (VMI_OS_LINUX == vmi_get_ostype(vmi)) {
-        tasks_offset = vmi_get_offset(vmi, "linux_tasks");
-        name_offset = vmi_get_offset(vmi, "linux_name");
-        pid_offset = vmi_get_offset(vmi, "linux_pid");
-    }
-    else if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)) {
-        tasks_offset = vmi_get_offset(vmi, "win_tasks");
-        name_offset = vmi_get_offset(vmi, "win_pname");
-        pid_offset = vmi_get_offset(vmi, "win_pid");
-    }
-
-    if (0 == tasks_offset) {
-        printf("Failed to find win_tasks\n");
-        goto error_exit;
-    }
-    if (0 == pid_offset) {
-        printf("Failed to find win_pid\n");
-        goto error_exit;
-    }
-    if (0 == name_offset) {
-        printf("Failed to find win_pname\n");
-        goto error_exit;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "linux_tasks", &tasks_offset) )
+            goto error_exit;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "linux_name", &name_offset) )
+            goto error_exit;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "linux_pid", &pid_offset) )
+            goto error_exit;
+    } else if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)) {
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "win_tasks", &tasks_offset) )
+            goto error_exit;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "win_pname", &name_offset) )
+            goto error_exit;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "win_pid", &pid_offset) )
+            goto error_exit;
+    } else if (VMI_OS_FREEBSD == vmi_get_ostype(vmi)) {
+        tasks_offset = 0;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "freebsd_name", &name_offset) )
+            goto error_exit;
+        if ( VMI_FAILURE == vmi_get_offset(vmi, "freebsd_pid", &pid_offset) )
+            goto error_exit;
     }
 
     /* pause the vm for consistent memory access */
@@ -90,40 +90,66 @@ int main (int argc, char **argv)
 
     /* demonstrate name and id accessors */
     char *name2 = vmi_get_name(vmi);
+    vmi_mode_t mode;
 
-    if (VMI_FILE != vmi_get_access_mode(vmi)) {
+    if (VMI_FAILURE == vmi_get_access_mode(vmi, NULL, 0, NULL, &mode))
+        goto error_exit;
+
+    if ( VMI_FILE != mode ) {
         uint64_t id = vmi_get_vmid(vmi);
 
         printf("Process listing for VM %s (id=%"PRIu64")\n", name2, id);
-    }
-    else {
+    } else {
         printf("Process listing for file %s\n", name2);
     }
     free(name2);
 
+    os_t os = vmi_get_ostype(vmi);
+
     /* get the head of the list */
-    if (VMI_OS_LINUX == vmi_get_ostype(vmi)) {
+    if (VMI_OS_LINUX == os) {
         /* Begin at PID 0, the 'swapper' task. It's not typically shown by OS
          *  utilities, but it is indeed part of the task list and useful to
          *  display as such.
          */
-        list_head = vmi_translate_ksym2v(vmi, "init_task") + tasks_offset;
-    }
-    else if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)) {
+        if ( VMI_FAILURE == vmi_translate_ksym2v(vmi, "init_task", &list_head) )
+            goto error_exit;
+
+        list_head += tasks_offset;
+    } else if (VMI_OS_WINDOWS == os) {
 
         // find PEPROCESS PsInitialSystemProcess
-        if(VMI_FAILURE == vmi_read_addr_ksym(vmi, "PsActiveProcessHead", &list_head)) {
+        if (VMI_FAILURE == vmi_read_addr_ksym(vmi, "PsActiveProcessHead", &list_head)) {
             printf("Failed to find PsActiveProcessHead\n");
+            goto error_exit;
+        }
+    } else if (VMI_OS_FREEBSD == vmi_get_ostype(vmi)) {
+        // find initproc
+        if ( VMI_FAILURE == vmi_translate_ksym2v(vmi, "allproc", &list_head) )
+            goto error_exit;
+    }
+
+    cur_list_entry = list_head;
+    if (VMI_FAILURE == vmi_read_addr_va(vmi, cur_list_entry, 0, &next_list_entry)) {
+        printf("Failed to read next pointer in loop at %"PRIx64"\n", cur_list_entry);
+        goto error_exit;
+    }
+
+    if (VMI_OS_FREEBSD == vmi_get_ostype(vmi)) {
+        // FreeBSD's p_list is not circularly linked
+        list_head = 0;
+        // Advance the pointer once
+        status = vmi_read_addr_va(vmi, cur_list_entry, 0, &cur_list_entry);
+        if (status == VMI_FAILURE) {
+            printf("Failed to read next pointer in loop at %"PRIx64"\n", cur_list_entry);
             goto error_exit;
         }
     }
 
-    next_list_entry = list_head;
-
     /* walk the task list */
-    do {
+    while (1) {
 
-        current_process = next_list_entry - tasks_offset;
+        current_process = cur_list_entry - tasks_offset;
 
         /* Note: the task_struct that we are looking at has a lot of
          * information.  However, the process name and id are burried
@@ -152,15 +178,29 @@ int main (int argc, char **argv)
             procname = NULL;
         }
 
-        /* follow the next pointer */
-
-        status = vmi_read_addr_va(vmi, next_list_entry, 0, &next_list_entry);
-        if (status == VMI_FAILURE) {
-            printf("Failed to read next pointer in loop at %"PRIx64"\n", next_list_entry);
-            goto error_exit;
+        if (VMI_OS_FREEBSD == os && next_list_entry == list_head) {
+            break;
         }
 
-    } while(next_list_entry != list_head);
+        /* follow the next pointer */
+        cur_list_entry = next_list_entry;
+        status = vmi_read_addr_va(vmi, cur_list_entry, 0, &next_list_entry);
+        if (status == VMI_FAILURE) {
+            printf("Failed to read next pointer in loop at %"PRIx64"\n", cur_list_entry);
+            goto error_exit;
+        }
+        /* In Windows, the next pointer points to the head of list, this pointer is actually the
+         * address of PsActiveProcessHead symbol, not the address of an ActiveProcessLink in
+         * EPROCESS struct.
+         * It means in Windows, we should stop the loop at the last element in the list, while
+         * in Linux, we should stop the loop when coming back to the first element of the loop
+         */
+        if (VMI_OS_WINDOWS == os && next_list_entry == list_head) {
+            break;
+        } else if (VMI_OS_LINUX == os && cur_list_entry == list_head) {
+            break;
+        }
+    };
 
 error_exit:
     /* resume the vm */

@@ -55,8 +55,6 @@ typedef enum {
 #endif
 
 #ifdef HAVE_HVMMEM_ACCESS_T
-#include <xen/hvm/hvm_op.h>
-
 typedef enum {
     XENMEM_access_n,
     XENMEM_access_r,
@@ -71,6 +69,13 @@ typedef enum {
     XENMEM_access_default
 } xenmem_access_t;
 #endif
+
+#define X86_TRAP_ext_int    0 /* external interrupt */
+#define X86_TRAP_nmi        2 /* nmi */
+#define X86_TRAP_hw_exc     3 /* hardware exception */
+#define X86_TRAP_sw_int     4 /* software interrupt (CD nn) */
+#define X86_TRAP_pri_sw_exc 5 /* ICEBP (F1) */
+#define X86_TRAP_sw_exc     6 /* INT3 (CC), INTO (CE) */
 
 #define HVMPME_mode_disabled   0
 #define HVMPME_mode_async      1
@@ -104,6 +109,7 @@ typedef enum {
 #define VM_EVENT_FLAG_ALTERNATE_P2M      (1 << 7)
 #define VM_EVENT_FLAG_SET_REGISTERS      (1 << 8)
 #define VM_EVENT_FLAG_SET_EMUL_INSN_DATA (1 << 9)
+#define VM_EVENT_FLAG_GET_NEXT_INTERRUPT (1 << 10)
 
 #define VM_EVENT_REASON_UNKNOWN                 0
 #define VM_EVENT_REASON_MEM_ACCESS              1
@@ -116,6 +122,9 @@ typedef enum {
 #define VM_EVENT_REASON_GUEST_REQUEST           8
 #define VM_EVENT_REASON_DEBUG_EXCEPTION         9
 #define VM_EVENT_REASON_CPUID                   10
+#define VM_EVENT_REASON_PRIVILEGED_CALL         11
+#define VM_EVENT_REASON_INTERRUPT               12
+#define VM_EVENT_REASON_DESCRIPTOR_ACCESS       13
 
 #define VM_EVENT_X86_CR0    0
 #define VM_EVENT_X86_CR3    1
@@ -250,6 +259,28 @@ struct vm_event_mov_to_msr {
     uint64_t value;
 };
 
+#define VM_EVENT_DESC_IDTR           1
+#define VM_EVENT_DESC_GDTR           2
+#define VM_EVENT_DESC_LDTR           3
+#define VM_EVENT_DESC_TR             4
+
+struct vm_event_desc_access {
+    union {
+        struct {
+            uint32_t instr_info;         /* VMX: VMCS Instruction-Information */
+            uint32_t _pad1;
+            uint64_t exit_qualification; /* VMX: VMCS Exit Qualification */
+        } vmx;
+        struct {
+            uint64_t exitinfo;           /* SVM: VMCB EXITINFO */
+            uint64_t _pad2;
+        } svm;
+    } arch;
+    uint8_t descriptor;                  /* VM_EVENT_DESC_* */
+    uint8_t is_write;
+    uint8_t _pad[6];
+};
+
 struct vm_event_cpuid {
     uint32_t insn_length;
     uint32_t leaf;
@@ -264,6 +295,14 @@ struct vm_event_emul_read_data {
 
 struct vm_event_emul_insn_data {
     uint8_t data[16];
+};
+
+struct vm_event_interrupt_x86 {
+    uint32_t vector;
+    uint32_t type;
+    uint32_t error_code;
+    uint32_t _pad;
+    uint64_t cr2;
 };
 
 typedef struct vm_event_st_46 {
@@ -303,10 +342,14 @@ typedef struct vm_event_st_48 {
         struct vm_event_mem_access            mem_access;
         struct vm_event_write_ctrlreg         write_ctrlreg;
         struct vm_event_mov_to_msr            mov_to_msr;
+        struct vm_event_desc_access           desc_access;
         struct vm_event_singlestep            singlestep;
         struct vm_event_debug                 software_breakpoint;
         struct vm_event_debug                 debug_exception;
         struct vm_event_cpuid                 cpuid;
+        union {
+            struct vm_event_interrupt_x86     x86;
+        } interrupt;
     } u;
 
     union {

@@ -39,28 +39,24 @@ windows_read_unicode_struct(
     access_context_t _ctx = *ctx;
     unicode_string_t *us = 0;   // return val
     size_t struct_size = 0;
-    size_t read = 0;
     addr_t buffer_va = 0;
     uint16_t buffer_len = 0;
 
-    if (VMI_PM_IA32E == vmi_get_page_mode(vmi)) {   // 64 bit guest
+    if (VMI_PM_IA32E == vmi->page_mode) {   // 64 bit guest
         win64_unicode_string_t us64 = { 0 };
         struct_size = sizeof(us64);
         // read the UNICODE_STRING struct
-        read = vmi_read(vmi, ctx, &us64, struct_size);
-        if (read != struct_size) {
+        if ( VMI_FAILURE == vmi_read(vmi, ctx, struct_size, &us64, NULL) ) {
             dbprint(VMI_DEBUG_READ, "--%s: failed to read UNICODE_STRING\n",__FUNCTION__);
             goto out_error;
         }   // if
         buffer_va = us64.pBuffer;
         buffer_len = us64.length;
-    }
-    else {
+    } else {
         win32_unicode_string_t us32 = { 0 };
         struct_size = sizeof(us32);
         // read the UNICODE_STRING struct
-        read = vmi_read(vmi, ctx, &us32, struct_size);
-        if (read != struct_size) {
+        if ( VMI_FAILURE == vmi_read(vmi, ctx, struct_size, &us32, NULL) ) {
             dbprint(VMI_DEBUG_READ, "--%s: failed to read UNICODE_STRING\n",__FUNCTION__);
             goto out_error;
         }   // if
@@ -68,17 +64,26 @@ windows_read_unicode_struct(
         buffer_len = us32.length;
     }   // if-else
 
+    if ( buffer_len > VMI_PS_4KB ) {
+        dbprint(VMI_DEBUG_READ, "--%s: the length of %" PRIu16 " in the UNICODE_STRING at 0x%" PRIx64 " is excessive, bailing out.\n",
+                __FUNCTION__, buffer_len, ctx->addr);
+        return NULL;
+    }
+
     // allocate the return value
-    us = safe_malloc(sizeof(unicode_string_t));
+    us = g_malloc0(sizeof(unicode_string_t));
+    if ( !us )
+        return NULL;
 
     us->length = buffer_len;
-    us->contents = safe_malloc(sizeof(uint8_t) * (buffer_len + 2));
+    us->contents = g_malloc0(sizeof(uint8_t) * (buffer_len + 2));
+
+    if ( !us->contents )
+        goto out_error;
 
     _ctx.addr = buffer_va;
-    read = vmi_read(vmi, &_ctx, us->contents, us->length);
-    if (read != us->length) {
-        dbprint
-            (VMI_DEBUG_READ, "--%s: failed to read UNICODE_STRING buffer\n",__FUNCTION__);
+    if ( VMI_FAILURE == vmi_read(vmi, &_ctx, us->length, us->contents, NULL) ) {
+        dbprint(VMI_DEBUG_READ, "--%s: failed to read UNICODE_STRING buffer\n",__FUNCTION__);
         goto out_error;
     }   // if
 
@@ -91,12 +96,8 @@ windows_read_unicode_struct(
     return us;
 
 out_error:
-    if (us) {
-        if (us->contents) {
-            free(us->contents);
-        }
-        free(us);
-    }
+    if (us) g_free(us->contents);
+    g_free(us);
     return 0;
 }
 

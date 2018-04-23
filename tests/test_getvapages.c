@@ -38,15 +38,17 @@
 START_TEST (test_get_va_pages)
 {
     vmi_instance_t vmi = NULL;
-    vmi_init(&vmi, VMI_AUTO | VMI_INIT_COMPLETE, get_testvm());
+    vmi_init_complete(&vmi, (void*)get_testvm(), VMI_INIT_DOMAINNAME, NULL,
+                      VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, NULL);
     GHashTable *config = NULL;
 
-    if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)){
-        addr_t dtb = vmi_pid_to_dtb(vmi, 4);
+    if (VMI_OS_WINDOWS == vmi_get_ostype(vmi)) {
+        addr_t dtb = 0;
+        vmi_pid_to_dtb(vmi, 4, &dtb);
         GSList *list = vmi_get_va_pages(vmi, dtb);
         fail_unless(list != NULL, "vmi_get_va_pages failed");
         GSList *loop = list;
-        while(loop) {
+        while (loop) {
             free(loop->data);
             loop=loop->next;
         }

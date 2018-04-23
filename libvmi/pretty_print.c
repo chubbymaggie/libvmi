@@ -46,8 +46,7 @@ vmi_print_hex(
             index = i * 16 + j;
             if (index < length) {
                 printf("%.2x ", data[index]);
-            }
-            else {
+            } else {
                 printf("   ");
             }
         }
@@ -58,8 +57,7 @@ vmi_print_hex(
             index = i * 16 + j;
             if (index < length) {
                 printf("%.2x ", data[index]);
-            }
-            else {
+            } else {
                 printf("   ");
             }
         }
@@ -71,8 +69,7 @@ vmi_print_hex(
             if (index < length) {
                 if (isprint((int) data[index])) {
                     printf("%c", data[index]);
-                }
-                else {
+                } else {
                     printf(".");
                 }
             }
@@ -89,8 +86,8 @@ vmi_print_hex_pa(
 {
     unsigned char *buf = safe_malloc(length);
 
-    vmi_read_pa(vmi, paddr, buf, length);
-    vmi_print_hex(buf, length);
+    if ( VMI_SUCCESS == vmi_read_pa(vmi, paddr, length, buf, NULL) )
+        vmi_print_hex(buf, length);
     free(buf);
 }
 
@@ -101,16 +98,16 @@ vmi_print_hex_va(
     vmi_pid_t pid,
     size_t length)
 {
+    status_t rc = VMI_FAILURE;
     addr_t paddr = 0;
 
-    if (!pid) {
-        paddr = vmi_translate_kv2p(vmi, vaddr);
-    }
-    else {
-        paddr = vmi_translate_uv2p(vmi, vaddr, pid);
-    }
+    if (!pid)
+        rc = vmi_translate_kv2p(vmi, vaddr, &paddr);
+    else if ( pid > 0 )
+        rc = vmi_translate_uv2p(vmi, vaddr, pid, &paddr);
 
-    vmi_print_hex_pa(vmi, paddr, length);
+    if ( VMI_SUCCESS == rc )
+        vmi_print_hex_pa(vmi, paddr, length);
 }
 
 void
@@ -119,7 +116,8 @@ vmi_print_hex_ksym(
     char *sym,
     size_t length)
 {
-    addr_t vaddr = vmi_translate_ksym2v(vmi, sym);
+    addr_t vaddr = 0;
 
-    vmi_print_hex_va(vmi, vaddr, 0, length);
+    if ( VMI_SUCCESS == vmi_translate_ksym2v(vmi, sym, &vaddr) )
+        vmi_print_hex_va(vmi, vaddr, 0, length);
 }

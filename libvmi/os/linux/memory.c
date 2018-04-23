@@ -72,7 +72,7 @@ linux_get_taskstruct_addr_from_pid(
         next_process -= tasks_offset;
 
         /* if we are back at the list head, we are done */
-    } while(list_head != next_process);
+    } while (list_head != next_process);
 
     return 0;
 }
@@ -108,11 +108,7 @@ linux_get_taskstruct_addr_from_pgd(
     next_process = vmi->init_task;
     list_head = next_process;
 
-    /* May fail for some drivers, but handle gracefully below by
-     * testing width
-     */
-    if ( VMI_FAILURE == driver_get_address_width(vmi, &width) )
-        return 0;
+    width = vmi_get_address_width(vmi);
 
     do {
         addr_t ptr = 0;
@@ -124,14 +120,13 @@ linux_get_taskstruct_addr_from_pgd(
          * a fallback. task_struct->active_mm can be found very reliably
          * at task_struct->mm + 1 pointer width
          */
-        if(!ptr && width)
+        if (!ptr && width)
             vmi_read_addr_va(vmi, next_process + mm_offset + width, 0, &ptr);
         vmi_read_addr_va(vmi, ptr + pgd_offset, 0, &task_pgd);
 
-        task_pgd = vmi_translate_kv2p(vmi, task_pgd);
-        if (task_pgd == pgd) {
+        if ( VMI_SUCCESS == vmi_translate_kv2p(vmi, task_pgd, &task_pgd) &&
+                task_pgd == pgd)
             return next_process;
-        }
 
         vmi_read_addr_va(vmi, next_process + tasks_offset, 0, &next_process);
         next_process -= tasks_offset;
@@ -143,21 +138,22 @@ linux_get_taskstruct_addr_from_pgd(
 }
 
 /* finds the address of the page global directory for a given pid */
-addr_t
+status_t
 linux_pid_to_pgd(
     vmi_instance_t vmi,
-    vmi_pid_t pid)
+    vmi_pid_t pid,
+    addr_t *pgd)
 {
-    addr_t ts_addr = 0, pgd = 0, ptr = 0;
+    addr_t ts_addr = 0, ptr = 0;
     uint8_t width = 0;
     status_t rc = VMI_FAILURE;
     linux_instance_t linux_instance = NULL;
     int mm_offset = 0;
     int pgd_offset = 0;
 
-    if (vmi->os_data == NULL) {
+    if (!vmi->os_data) {
         errprint("VMI_ERROR: No os_data initialized\n");
-        return 0;
+        return VMI_FAILURE;
     }
 
     linux_instance = vmi->os_data;
@@ -169,11 +165,13 @@ linux_pid_to_pgd(
     ts_addr = linux_get_taskstruct_addr_from_pid(vmi, pid);
     if (!ts_addr) {
         errprint("Could not find task struct for pid = %d.\n", pid);
-        goto error_exit;
+        return VMI_FAILURE;
     }
 
     /* now follow the pointer to the memory descriptor and grab the pgd value */
-    vmi_read_addr_va(vmi, ts_addr + mm_offset, 0, &ptr);
+    rc = vmi_read_addr_va(vmi, ts_addr + mm_offset, 0, &ptr);
+    if ( VMI_FAILURE == rc )
+        return VMI_FAILURE;
 
     /* task_struct->mm is NULL when Linux is executing on the behalf
      * of a task, or if the task represents a kthread. In this context,
@@ -181,10 +179,8 @@ linux_pid_to_pgd(
      * a fallback. task_struct->active_mm can be found very reliably
      * at task_struct->mm + 1 pointer width
      */
-    if(!ptr)
-    {
-        switch(vmi->page_mode)
-        {
+    if (!ptr) {
+        switch (vmi->page_mode) {
             case VMI_PM_AARCH64:// intentional fall-through
             case VMI_PM_IA32E:
                 width = 8;
@@ -195,37 +191,34 @@ linux_pid_to_pgd(
                 width = 4;
                 break;
             default:
-                goto error_exit;
+                return 0;
         };
 
         rc = vmi_read_addr_va(vmi, ts_addr + mm_offset + width, 0, &ptr);
 
-        if( rc == VMI_FAILURE || !ptr )
-        {
-            goto error_exit;
-        }
+        if ( VMI_FAILURE == rc || !ptr )
+            return rc;
     }
 
-    vmi_read_addr_va(vmi, ptr + pgd_offset, 0, &pgd);
+    rc = vmi_read_addr_va(vmi, ptr + pgd_offset, 0, pgd);
+    if ( VMI_FAILURE == rc )
+        return rc;
 
     /* convert pgd into a machine address */
-    pgd = vmi_translate_kv2p(vmi, pgd);
-
-error_exit:
-    return pgd;
+    return vmi_translate_kv2p(vmi, *pgd, pgd);
 }
 
-int
+status_t
 linux_pgd_to_pid(
     vmi_instance_t vmi,
-    addr_t pgd)
+    addr_t pgd,
+    vmi_pid_t *pid)
 {
-    vmi_pid_t pid = -1;
     addr_t ts_addr = 0;
     linux_instance_t linux_instance = NULL;
     int pid_offset = 0;
 
-    if (vmi->os_data == NULL) {
+    if (!vmi->os_data) {
         errprint("VMI_ERROR: No os_data initialized\n");
         return VMI_FAILURE;
     }
@@ -237,12 +230,9 @@ linux_pgd_to_pid(
     ts_addr = linux_get_taskstruct_addr_from_pgd(vmi, pgd);
     if (!ts_addr) {
         errprint("Could not find task struct for pgd = 0x%"PRIx64".\n", pgd);
-        goto error_exit;
+        return VMI_FAILURE;
     }
 
     /* now follow the pointer to the memory descriptor and grab the pid value */
-    vmi_read_32_va(vmi, ts_addr + pid_offset, 0, (uint32_t*)&pid);
-
-error_exit:
-    return pid;
+    return vmi_read_32_va(vmi, ts_addr + pid_offset, 0, (uint32_t*)pid);
 }

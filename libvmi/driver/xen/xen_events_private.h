@@ -106,6 +106,7 @@ static const unsigned int event_response_conversion[] = {
     [VMI_EVENT_RESPONSE_VMM_PAGETABLE_ID] = VM_EVENT_FLAG_ALTERNATE_P2M,
     [VMI_EVENT_RESPONSE_SET_REGISTERS] = VM_EVENT_FLAG_SET_REGISTERS,
     [VMI_EVENT_RESPONSE_SET_EMUL_INSN] = VM_EVENT_FLAG_SET_EMUL_INSN_DATA,
+    [VMI_EVENT_RESPONSE_GET_NEXT_INTERRUPT] = VM_EVENT_FLAG_GET_NEXT_INTERRUPT,
 };
 
 typedef struct xen_events {
@@ -127,7 +128,7 @@ vmi_flags_sanity_check(vmi_mem_access_t page_access_flag)
      * AN EPT misconfiguration occurs if any of the following is identified while translating a guest-physical address:
      * * The value of bits 2:0 of an EPT paging-structure entry is either 010b (write-only) or 110b (write/execute).
      */
-    if(page_access_flag == VMI_MEMACCESS_R || page_access_flag == VMI_MEMACCESS_RX) {
+    if (page_access_flag == VMI_MEMACCESS_R || page_access_flag == VMI_MEMACCESS_RX) {
         errprint("%s error: can't set requested memory access, unsupported by EPT.\n", __FUNCTION__);
         return VMI_FAILURE;
     }
@@ -212,5 +213,10 @@ convert_vmi_flags_to_xenmem(vmi_mem_access_t page_access_flag, xenmem_access_t *
 
     return VMI_SUCCESS;
 }
+
+typedef struct xen_instance xen_instance_t;
+
+status_t wait_for_event_or_timeout(xen_instance_t *xen, xc_evtchn *xce, unsigned long ms);
+int resume_domain(vmi_instance_t vmi);
 
 #endif
